@@ -1,0 +1,80 @@
+[
+  {
+    "name": "文献综述",
+    "description": "对某个研究主题进行系统的文献综述",
+    "steps": [
+      "使用 search_arxiv 搜索相关论文（多个关键词组合）",
+      "从搜索结果中筛选最相关的 5-10 篇论文",
+      "使用 fetch_webpage 获取论文详情",
+      "使用 summarize_text 总结每篇论文的要点",
+      "综合分析，撰写文献综述（研究现状、主要方法、发展趋势）",
+      "使用 save_research_finding 保存关键发现"
+    ],
+    "tools_needed": [
+      "search_arxiv",
+      "fetch_webpage",
+      "summarize_text",
+      "save_research_finding"
+    ],
+    "category": "literature",
+    "usage_count": 0
+  },
+  {
+    "name": "论文精读",
+    "description": "深入阅读和分析一篇特定论文",
+    "steps": [
+      "获取论文全文（通过 URL 或本地文件）",
+      "提取论文结构：摘要、引言、方法、实验、结论",
+      "分析核心方法和创新点",
+      "评估实验设计和结果的合理性",
+      "总结论文的优缺点和潜在改进方向",
+      "保存关键发现到记忆系统"
+    ],
+    "tools_needed": [
+      "fetch_webpage",
+      "ingest_paper",
+      "search_knowledge_base",
+      "summarize_text"
+    ],
+    "category": "literature",
+    "usage_count": 0
+  },
+  {
+    "name": "研究方案设计",
+    "description": "为一个研究问题设计详细的研究方案",
+    "steps": [
+      "明确研究问题和目标",
+      "检索相关文献了解现有方法",
+      "使用 multi_agent_collaborate 召集多专家讨论方案",
+      "设计研究方法和实验流程",
+      "明确评估指标和基线对比",
+      "撰写研究方案文档"
+    ],
+    "tools_needed": [
+      "search_arxiv",
+      "search_knowledge_base",
+      "multi_agent_collaborate"
+    ],
+    "category": "analysis",
+    "usage_count": 0
+  },
+  {
+    "name": "学术写作辅助",
+    "description": "辅助撰写论文的各个部分",
+    "steps": [
+      "确认要撰写的部分（摘要/引言/方法/实验/结论）",
+      "从知识库检索相关素材",
+      "回忆之前的研究发现",
+      "使用 multi_agent_collaborate 由写作专家撰写初稿",
+      "由审查专家给出修改建议",
+      "输出最终版本"
+    ],
+    "tools_needed": [
+      "search_knowledge_base",
+      "recall_memories",
+      "multi_agent_collaborate"
+    ],
+    "category": "writing",
+    "usage_count": 0
+  }
+]

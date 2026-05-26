@@ -1,0 +1,47 @@
+# ── Secrets ──────────────────────────────────────────
+.env
+.env.local
+*.pem
+*.key
+
+# ── Python ───────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Virtual envs ─────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── User data (databases, vector store, papers) ─────
+data/*.db
+data/*.db-journal
+data/chroma_db/
+data/papers/*
+!data/papers/.gitkeep
+data/chat_export_*.md
+
+# ── IDE ──────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── OS ───────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Build artifacts ──────────────────────────────────
+build/
+dist/
+*.egg-info/
+
+# ── Local-only docs ──────────────────────────────────
+PROJECT_REPORT.md
