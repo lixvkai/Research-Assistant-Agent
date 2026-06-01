@@ -17,7 +17,7 @@ from memory.memory_store import MemoryManager
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-# ── Agent lifecycle ─────────────────────────────────────────────
+# ── Agent lifecycle ────────────────────────────────────────────
 
 agent: ReActAgent | None = None
 mcp_tools_info: list[dict] = []
