@@ -29,9 +29,9 @@
 
 ## 界面预览
 
-Main UI
+![Main UI](docs/科研助手1.png)
 
-UI presentation
+![Reasoning Trace](docs/科研助手2.png)
 
 界面三栏布局：
 
