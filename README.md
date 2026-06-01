@@ -29,11 +29,9 @@
 
 ## 界面预览
 
->
-> ```markdown
-> ![Main UI](docs/科研助手1.png)
-> ![UI presentation](docs/科研助手2.png)
-> ```
+![Main UI](docs/科研助手1.png)
+
+![UI presentation](docs/科研助手2.png)
 
 界面三栏布局：
 
