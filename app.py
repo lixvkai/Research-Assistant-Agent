@@ -54,6 +54,8 @@ def format_streaming(events: list[dict]) -> str:
             if len(result) > 500:
                 result = result[:500] + "\n…(已截断)"
             parts.append(f"\n📋 **返回结果**\n\n{result}\n")
+        elif t == "reflection":
+            parts.append(f"\n🔁 **自我反思**：{ev['critique']}\n")
         elif t == "error":
             parts.append(f"\n❌ **错误**: {ev['content']}\n")
     parts.append("\n\n⏳ *正在推理…*")
@@ -82,6 +84,8 @@ def format_final(events: list[dict]) -> str:
             if len(result) > 200:
                 result = result[:200] + "…"
             step_parts.append(f"📋 {result}\n")
+        elif t == "reflection":
+            step_parts.append(f"🔁 自我反思：{ev['critique']}\n")
         elif t == "answer":
             answer = ev["content"]
         elif t == "error":
@@ -118,6 +122,8 @@ def _build_trace_details(step_events: list[dict]) -> str:
         elif t == "observation":
             result = ev["result"][:200] + "…" if len(ev["result"]) > 200 else ev["result"]
             parts.append(f"📋 {result}\n")
+        elif t == "reflection":
+            parts.append(f"🔁 自我反思：{ev['critique']}\n")
     if not parts:
         return ""
     return (
@@ -163,7 +169,7 @@ def bot_respond(history: list):
             events.append(event)
             if etype == "answer":
                 history[-1] = {"role": "assistant", "content": format_final(events)}
-            elif etype in ("step_start", "thought", "action", "observation", "error"):
+            elif etype in ("step_start", "thought", "action", "observation", "reflection", "error"):
                 step_events.append(event)
                 history[-1] = {"role": "assistant", "content": format_streaming(step_events)}
             yield history
@@ -408,11 +414,15 @@ def build_skills_html() -> str:
         )
     html = '<div class="skills-list">'
     for s in skills:
+        if s.usage_count > 0:
+            badge = f'{s.usage_count}次 · 成功率{s.success_rate:.0%}'
+        else:
+            badge = '未执行'
         html += (
             f'<div class="skill-card">'
             f'<div class="skill-header">'
             f'<span class="skill-name">{s.name}</span>'
-            f'<span class="skill-badge">{s.usage_count}次</span>'
+            f'<span class="skill-badge">{badge}</span>'
             f'</div>'
             f'<div class="skill-desc">{s.description}</div>'
             f'<div class="skill-cat">{s.category}</div>'

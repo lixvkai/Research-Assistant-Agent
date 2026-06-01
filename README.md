@@ -1,8 +1,10 @@
 # 科研助手 Agent
 
-> 基于 **ReAct + RAG + Multi-Agent** 的端到端科研助手，集成论文检索、知识库问答、多专家协作和长期记忆，提供流式可视化的推理过程。
+> 基于 **LangGraph + RAG + Multi-Agent** 的端到端科研助手，集成论文检索、知识库问答、多专家协作、自我反思和长期记忆，工具层接入 **MCP（Model Context Protocol）**，提供流式可视化的推理过程。
 
 [![Python](https://img.shields.io/badge/Python-3.10+-3776ab?logo=python&logoColor=white)](https://www.python.org/)
+[![LangGraph](https://img.shields.io/badge/Orchestration-LangGraph-1c3c3c)](https://langchain-ai.github.io/langgraph/)
+[![MCP](https://img.shields.io/badge/Tools-MCP-6b46c1)](https://modelcontextprotocol.io/)
 [![Gradio](https://img.shields.io/badge/Gradio-4.x-orange?logo=gradio)](https://gradio.app/)
 [![DeepSeek](https://img.shields.io/badge/LLM-DeepSeek-1d4ed8)](https://platform.deepseek.com/)
 [![ChromaDB](https://img.shields.io/badge/VectorDB-ChromaDB-10b981)](https://www.trychroma.com/)
@@ -10,25 +12,27 @@
 
 ---
 
-## ✨ 项目亮点
+## 项目亮点
 
-- 🧠 **自实现 ReAct Agent** — Thought → Action → Observation 循环，所有推理步骤通过 generator 流式吐出，UI 端实时渲染
-- 🔌 **MCP 风格工具协议层** — 工具自动从模块发现并注册，新增工具零侵入，对 Agent 透明
-- 📚 **进阶 RAG 流水线** — 查询改写 → 多召回 → Cross‑Encoder（`BAAI/bge-reranker-base`）重排序 + 基于句子嵌入相似度的语义分块
-- 🤝 **Multi‑Agent 协作** — Planner LLM 拆分子任务并构建依赖图，4 个专家 Agent（文献 / 数据 / 写作 / 审查）按拓扑顺序执行后由总编 Agent 融合结果
-- 🧩 **三层记忆系统** — 短期摘要压缩 + 长期 SQLite 持久化（用户偏好 / 研究发现）+ 多会话 ChatHistory
-- 🎯 **Skills 系统** — 把常见科研工作流（文献综述、论文精读、研究方案设计…）固化为可检索、可调用的可复用模板
-- 🎨 **流式可视化 UI** — Gradio + 自定义 CSS，支持知识库管理、历史会话切换、对话导出
+- **LangGraph ReAct 图** — `agent → tools → agent` 推理-行动循环编排为状态图，推理步骤通过 `run_iter` 以结构化事件流式吐出，UI 端实时渲染（步数封顶，优雅收尾）
+- **自我反思（Reflexion）** — Agent 与 Orchestrator 各内置 `reflect` 节点 + 条件回边，答案不达标自动带批评重做
+- **MCP 协议** — 对外用官方 SDK 把工具暴露为 MCP Server（可被 Cursor / Claude Desktop 调用），对内作为 MCP Client 消费外部 MCP Server，工具透明融入 Agent
+- **Pydantic 结构化契约** — 规划 / 事件 / 工具规范统一为 Pydantic 模型，边界即校验，解析健壮兜底
+- **进阶 RAG 流水线** — 查询改写 → 多召回 → Cross‑Encoder（`BAAI/bge-reranker-base`）重排序 + 基于句子嵌入相似度的语义分块
+- **Multi‑Agent 协作** — Planner LLM 拆分子任务并构建依赖图，4 个专家 Agent（文献 / 数据 / 写作 / 审查）持有各自领域的工具子集，按依赖顺序自主推理-调用工具，最终由总编节点融合 + 反思
+- **三层记忆系统** — 短期摘要压缩 + 长期 SQLite 持久化（用户偏好 / 研究发现）+ 多会话 ChatHistory
+- **Skills 系统（含执行引擎）** — 把常见科研工作流固化为可复用模板，可被真正"执行"驱动工具完成任务，并统计调用次数与成功率
+- **流式可视化 UI** — Gradio + 自定义 CSS，支持知识库管理、历史会话切换、对话导出
+- **自动化测试** — `pytest` 离线测试套件覆盖事件契约、解析兜底、图路径、反思、步数封顶、Skill 执行、MCP 往返
 
 ---
 
-## 🖼️ 界面预览
+## 界面预览
 
-> 把截图放到 `docs/` 下，然后取消下面注释即可。
 >
 > ```markdown
-> ![Main UI](docs/screenshot-main.png)
-> ![ReAct Trace](docs/screenshot-trace.png)
+> ![Main UI](docs/科研助手1.png)
+> ![UI presentation](docs/科研助手2.png)
 > ```
 
 界面三栏布局：
@@ -39,42 +43,40 @@
 
 ---
 
-## 🏗️ 架构
+## 架构
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                        Gradio Web UI (app.py)                    │
 │        流式推理过程展示 · 知识库管理 · 历史会话 · 文件上传       │
 └────────────────────────────┬─────────────────────────────────────┘
-                             │
-              ┌──────────────▼───────────────┐
-              │       ReAct Agent (核心)     │
-              │   Thought → Action → Observe │
-              │        (run_iter 生成器)     │
-              └──────┬─────────────────┬─────┘
+                             │ run_iter 事件流
+              ┌──────────────▼─────────────────────────┐
+              │        ReAct Agent (LangGraph)         │
+              │  START→agent→[tools?]→tools→agent      │
+              │           └→reflect→[修订?]→agent / END │
+              └──────┬─────────────────┬───────────────┘
                      │                 │
         ┌────────────▼─────┐    ┌──────▼─────────┐
-        │  MCP Tool Server │    │ Memory Manager │
-        │  (工具注册/绑定) │    │ (短期+长期记忆)│
-        └────────┬─────────┘    └──────┬─────────┘
-                 │                     │
-       ┌─────────┼─────────┬───────────┼──────────┐
-       ▼         ▼         ▼           ▼          ▼
-   ┌────────┐ ┌──────┐ ┌────────┐ ┌────────┐ ┌────────┐
-   │ Arxiv  │ │ RAG  │ │ Multi- │ │ Skills │ │ Memory │
-   │  Tool  │ │Engine│ │ Agent  │ │Manager │ │ SQLite │
-   └────────┘ └──┬───┘ └───┬────┘ └────────┘ └────────┘
-                 │         │
-        ┌────────▼──┐ ┌────▼───────────────────────┐
-        │ ChromaDB  │ │ Orchestrator + 4 Experts:  │
-        │ + Embed   │ │ Literature/Data/Write/Review│
-        │ + Rerank  │ └────────────────────────────┘
-        └───────────┘
-                 │
-        ┌────────▼──────────┐
-        │ DeepSeek LLM API  │
-        │ (OpenAI 兼容)     │
-        └───────────────────┘
+        │   MCP 工具层      │    │ Memory Manager │
+        │ 注册表/绑定/分类  │    │ (短期+长期记忆)│
+        └──┬────────────┬──┘    └──────┬─────────┘
+           │            │              │
+   ┌───────▼──────┐ ┌───▼───────────┐  │
+   │ 本地内置工具 │ │ 外部 MCP 工具 │  │   ┌──────────────────────────────┐
+   │(arxiv/rag/…) │ │ via MCP Client│  │   │ Orchestrator (LangGraph)     │
+   └──────┬───────┘ └───────────────┘  │   │ plan→execute→synthesize      │
+          │                            │   │      →reflect→(synthesize/END)│
+   ┌──────▼─────┐                      │   │  4 Experts: Lit/Data/Wri/Rev │
+   │ ChromaDB   │                      │   └──────────────┬───────────────┘
+   │ +Embed     │                      │                  │
+   │ +Rerank    │                      └──────────────────┤
+   └────────────┘                                         │
+                                              ┌───────────▼────────┐
+   对外：mcp_server/research_mcp_server.py     │  DeepSeek LLM API   │
+   把内置工具暴露为 MCP Server (stdio)          │  (OpenAI 兼容,      │
+   → 可被 Cursor / Claude Desktop 调用          │   timeout+retry)    │
+                                              └────────────────────┘
 ```
 
 ### 目录结构
@@ -82,15 +84,19 @@
 ```text
 .
 ├── app.py                  # Gradio Web UI 入口
-├── config/settings.py      # 全局配置（API key 读取 / 路径 / 上限）
+├── config/settings.py      # 全局配置（API key / 路径 / 步数 / 反思 / LLM 超时重试 / MCP_SERVERS）
 ├── core/
-│   ├── llm.py              # DeepSeek LLM 客户端（chat / chat_stream）
-│   ├── react_agent.py      # ReAct Agent + ToolRegistry
-│   └── mcp.py              # MCP Server 工具协议层
+│   ├── llm.py              # DeepSeek LLM 客户端（chat，含 timeout + 自动重试）
+│   ├── schemas.py          # Pydantic 模型：Plan / ReAct 事件 / ToolSpec / Reflection
+│   ├── react_agent.py      # LangGraph ReAct 图（agent/tools/reflect）+ ToolRegistry
+│   ├── mcp.py              # 工具注册表 / 绑定 / 外部 MCP 工具加载
+│   └── mcp_client.py       # MCP Client：连接外部 MCP Server（异步→同步桥接）
+├── mcp_server/
+│   └── research_mcp_server.py  # MCP Server：把内置工具对外暴露（stdio）
 ├── agents/
-│   ├── base_agent.py       # ExpertAgent 基类
+│   ├── base_agent.py       # ExpertAgent 基类（专家关闭反思）
 │   ├── specialists.py      # 4 个专家 Agent
-│   └── orchestrator.py     # 任务规划与多 Agent 协调器
+│   └── orchestrator.py     # LangGraph 多 Agent 图（plan/execute/synthesize/reflect）
 ├── memory/
 │   ├── memory_store.py     # 短期(摘要压缩) + 长期(SQLite) 记忆
 │   └── chat_history.py     # 多会话历史持久化
@@ -98,35 +104,37 @@
 │   ├── document_loader.py  # PDF/TXT 加载 + 语义分块
 │   ├── vector_store.py     # ChromaDB 封装
 │   └── rag_engine.py       # 改写 → 召回 → 重排序 → 拼装
-├── skills/skill_manager.py # Skill 加载 / 检索 / 持久化
-├── tools/                  # 10+ 工具
-│   ├── basic_tools.py      # calculator / get_current_time
+├── skills/
+│   ├── skill_manager.py    # Skill 加载 / 检索 / 持久化 / 成功率统计
+│   └── skill_executor.py   # Skill 执行引擎（按步骤驱动工具）
+├── tools/                  # 11+ 工具
+│   ├── basic_tools.py      # calculator(AST 安全求值) / get_current_time
 │   ├── arxiv_tool.py       # search_arxiv / import_arxiv_paper
 │   ├── web_tool.py         # fetch_webpage
 │   ├── summarize_tool.py   # summarize_text
 │   ├── rag_tool.py         # search_knowledge_base / ingest_paper
 │   ├── memory_tool.py      # save_research_finding / recall_memories
 │   ├── multi_agent_tool.py # multi_agent_collaborate
-│   ├── skill_tool.py       # list/get/create_skill
+│   ├── skill_tool.py       # list/get/create/execute_skill
 │   ├── compare_tool.py     # compare_papers
 │   └── trend_tool.py       # research_trend
+├── tests/                  # pytest 离线测试套件
+│   ├── conftest.py         # 桩化 LLM 夹具
+│   ├── test_schemas.py / test_orchestrator.py / test_react_agent.py
+│   ├── test_skills.py / test_calculator.py / test_mcp.py
 ├── utils/audio.py          # 语音转文字（可选）
 ├── static/                 # 抽离的 CSS / JS
-│   ├── style.css
-│   └── history.js
-├── data/                   # 运行时产物（已 gitignore）
-│   ├── chroma_db/          # 向量库
-│   ├── papers/             # 用户上传的论文
-│   ├── memory.db           # 长期记忆
-│   └── chat_history.db     # 会话历史
-├── requirements.txt
+├── data/                   # 运行时产物（已 gitignore）：chroma_db / papers / *.db / skills.json
+├── requirements.txt        # 运行依赖
+├── requirements-dev.txt    # 测试依赖（pytest）
+├── pytest.ini
 ├── .env.example
 └── README.md
 ```
 
 ---
 
-## 🚀 快速开始
+## 快速开始
 
 ### 1. 环境要求
 
@@ -171,37 +179,58 @@ python app.py
 
 ---
 
-## 💡 使用示例
+## 使用示例
 
 试着输入：
 
 | 类型 | 示例 |
 |------|------|
-| 📄 论文检索 | `帮我搜索关于 retrieval-augmented generation 的最新论文` |
-| 📈 趋势分析 | `分析 diffusion model 近 5 年的研究趋势` |
-| 📚 知识库 QA | （先在右侧上传 PDF）`这篇论文的核心创新是什么？` |
-| 🤝 多专家协作 | `帮我设计一个关于 LLM 推理能力的研究方案` |
-| 🧮 工具组合 | `帮我搜索 transformer 论文，下载第 1 篇并总结摘要` |
+| 论文检索 | `帮我搜索关于 retrieval-augmented generation 的最新论文` |
+| 趋势分析 | `分析 diffusion model 近 5 年的研究趋势` |
+| 知识库 QA | （先在右侧上传 PDF）`这篇论文的核心创新是什么？` |
+| 多专家协作 | `帮我设计一个关于 LLM 推理能力的研究方案` |
+| 工具组合 | `帮我搜索 transformer 论文，下载第 1 篇并总结摘要` |
 
-观察聊天区底部的 **「🔍 推理过程」** 折叠块，可以看到 Agent 调用了哪些工具、传了什么参数。
+观察聊天区底部的 **「推理过程」** 折叠块，可以看到 Agent 调用了哪些工具、传了什么参数。
 
 ---
 
-## 🔬 核心设计亮点
+## 核心设计亮点
 
-### 1. ReAct Agent — generator + 流式 token
+### 1. LangGraph ReAct 图 + 流式事件
 
-`core/react_agent.py` 的 `run_iter()` 是一个 generator，对外吐出结构化事件：
+`core/react_agent.py` 把推理-行动循环编排为 LangGraph 状态图：
 
 ```text
-step_start → thought → action → observation → ... → answer_token* → answer
+START → agent → [有 tool_calls?] ─是→ tools → agent
+                     └─否→ reflect → [需修订?] ─是→ agent
+                                         └─否→ END
 ```
 
-UI 层把这些事件实时渲染成 markdown，用户直接看到「思考 → 工具调用 → 返回 → 再思考」的完整链条，而不是只等到最终结果。
+- LLM 调用复用 `core/llm`（不引入 langchain-openai），LangGraph 只负责编排；
+- `run_iter()` 仍是 generator，把节点更新翻译为结构化事件 `step_start → thought → action → observation → reflection → answer`，UI 实时渲染完整推理链条；
+- 步数封顶在 `MAX_REACT_STEPS`，超限优雅收尾，不会无限循环。
 
-### 2. MCP 工具协议层
+### 2. MCP（Model Context Protocol）
 
-`core/mcp.py` 提供了一个**工具自描述协议**：每个工具模块只需暴露一个 `TOOL_DEFINITION` / `TOOL_DEFINITIONS` 列表，`MCPServer` 用 `importlib` 自动加载并注册，新增工具**完全不用动 Agent 代码**。
+工具层双向打通官方 MCP 协议：
+
+- **对外（Server）**：`mcp_server/research_mcp_server.py` 用官方 SDK 把内置工具暴露为 MCP Server（stdio），可被 Cursor / Claude Desktop 等任意 MCP 客户端调用：
+
+```bash
+python -m mcp_server.research_mcp_server
+```
+
+- **对内（Client）**：`core/mcp_client.py` 连接外部 MCP Server，把其工具转成本项目工具规范并透明注册给 Agent。在 `config/settings.py` 配置即可接入：
+
+```python
+MCP_SERVERS = [
+    {"name": "filesystem", "command": "npx",
+     "args": ["-y", "@modelcontextprotocol/server-filesystem", PAPERS_DIR]},
+]
+```
+
+新增**本地内置工具**仍然零侵入——只需在工具模块暴露 `TOOL_DEFINITION(S)`，`MCPServer` 用 `importlib` 自动加载注册：
 
 ```python
 # tools/your_tool.py
@@ -225,9 +254,9 @@ TOOL_DEFINITION = {
 
 加上 `rag/document_loader.py` 的**语义分块**（基于句子嵌入相似度断点），整体检索质量比单纯的固定窗口分块 + 单次召回有显著提升。
 
-### 4. Multi-Agent 协作
+### 4. Multi-Agent 协作（LangGraph 图）
 
-`agents/orchestrator.py` 中 Planner LLM 输出结构化的 JSON 任务图：
+`agents/orchestrator.py` 编排为 `plan → execute → synthesize → reflect → (synthesize / END)` 状态图。Planner LLM 输出的 JSON 由 Pydantic `Plan` 校验：
 
 ```json
 {
@@ -240,7 +269,18 @@ TOOL_DEFINITION = {
 }
 ```
 
-按 `depends_on` 拓扑顺序执行，依赖结果作为下游 Agent 的 context，最后由总编 Agent 融合。
+按 `depends_on` 顺序执行，依赖结果作为下游 Agent 的 context，`synthesize` 节点融合，`reflect` 节点对综合稿审查，不达标则带批评回到 `synthesize` 重写。
+
+每个专家继承 `ExpertAgent`，内部持有一个独立的 `ReActAgent`，通过 `tool_categories` 类属性声明可访问的工具类别，由共享的 `MCPServer` 按 category 过滤后注入。这样每个专家拥有**领域适配的工具子集**，能在子任务中自主进行 ReAct 推理：
+
+| 专家 | 可用工具类别 |
+|------|-------------|
+| LiteratureAgent | 论文检索 / 知识库 / 文本处理 / 论文分析 / 网络工具 |
+| DataAnalysisAgent | 基础工具 / 文本处理 / 趋势分析 / 知识库 |
+| WritingAgent | 文本处理 / 知识库 / 基础工具 |
+| ReviewAgent | 文本处理 / 论文分析 / 知识库 / 基础工具 |
+
+> 故意不把「多Agent协作」和「记忆系统」类别分配给专家，前者避免递归调用，后者避免长期记忆被子任务污染。
 
 ### 5. 三层记忆系统
 
@@ -250,33 +290,58 @@ TOOL_DEFINITION = {
 
 注入 prompt 时会拼上摘要 + 相关历史记忆 + 用户偏好三段。
 
+### 6. 自我反思（Reflexion）
+
+ReAct 图与 Orchestrator 图各内置 `reflect` 节点：生成答案后由 LLM 做结构化审查（输出 `{"sufficient": bool, "critique": str}`，Pydantic 校验，解析失败默认通过以防死循环）。不达标则把批评作为反馈带回上游重做，最多 `MAX_REFLECTIONS` 轮。专家 Agent 关闭反思，由 Orchestrator 层统一负责，避免子任务反思放大成本。
+
+### 7. Skills 执行引擎 + 成功率
+
+`skills/skill_executor.py` 把技能的"自然语言步骤 + 所需工具 + 具体任务"拼成带流程约束的提示，交给绑定全部工具的 Agent 真正执行，并按是否产出有效答案回写 `success_count / failure_count`，技能卡展示「N次 · 成功率X%」。Agent 可 `list_skills → execute_skill` 自主调用。
+
 ---
 
-## 🛠️ 技术栈
+## 测试
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+`pytest` 套件完全离线（桩化 LLM、不需 API key），覆盖：事件契约、规划解析兜底、LangGraph 图路径（工具/反思/步数封顶/多轮记忆）、Skill 执行与成功率、calculator 安全求值、以及 MCP Client↔Server 真协议往返。
+
+---
+
+## 技术栈
 
 | 类别 | 技术 |
 |------|------|
-| LLM | DeepSeek（OpenAI 兼容） |
+| 编排 | LangGraph（StateGraph + 条件边 + 反思回环） |
+| LLM | DeepSeek（OpenAI 兼容，含 timeout + 自动重试） |
+| 工具协议 | MCP（Model Context Protocol，官方 `mcp` SDK，对外 Server + 对内 Client） |
+| 数据契约 | Pydantic v2 |
 | Embedding | `all-MiniLM-L6-v2` (Sentence-Transformers) |
 | Reranker | `BAAI/bge-reranker-base` (Cross-Encoder) |
 | 向量库 | ChromaDB（`hnsw:space=cosine` 持久化） |
 | 持久化 | SQLite |
 | Web UI | Gradio 4.x + 自定义 CSS |
+| 测试 | pytest |
 | HTTP | httpx |
 | PDF | PyPDF2 |
 
 ---
 
-## 🗺️ Roadmap
+## Roadmap
 
+- [ ] RAG 嵌入去重（统一模型实例，入库/查询复用同一份编码）
+- [ ] 多用户隔离（Gradio per-session 状态）
 - [ ] 工具调用并行化（多个 tool_call 一次执行）
 - [ ] 接入更多 LLM 后端（OpenAI / Qwen / Claude）
 - [ ] 论文图谱与引用关系可视化
 - [ ] 接入 Semantic Scholar / Google Scholar 数据源
-- [ ] Docker 化部署 + 多用户隔离
+- [ ] Docker 化部署
 
 ---
 
-## 📄 License
+## License
 
-MIT License — 仅供学习和个人项目使用。
+本项目以 MIT License 开源，详见 [LICENSE](LICENSE)。

@@ -1,6 +1,5 @@
 """技能工具 — 让 Agent 可以查看和使用预定义技能。"""
 
-import json
 from skills.skill_manager import SkillManager, Skill
 
 _manager: SkillManager | None = None
@@ -56,6 +55,12 @@ def create_skill(name: str, description: str, steps: str, tools_needed: str, cat
     return f"成功创建技能 '{name}'，共 {len(skill.steps)} 个步骤。"
 
 
+def execute_skill(name: str, task: str) -> str:
+    """按某个技能的标准流程执行具体任务。"""
+    from skills.skill_executor import execute_skill as _run
+    return _run(name, task, manager=_get_manager())
+
+
 TOOL_DEFINITIONS = [
     {
         "name": "list_skills",
@@ -96,5 +101,18 @@ TOOL_DEFINITIONS = [
             "required": ["name", "description", "steps", "tools_needed"],
         },
         "func": create_skill,
+    },
+    {
+        "name": "execute_skill",
+        "description": "按某个已有技能的标准流程执行具体任务。先用 list_skills 找到合适技能，再用本工具执行。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "要执行的技能名称"},
+                "task": {"type": "string", "description": "本次要完成的具体任务描述"},
+            },
+            "required": ["name", "task"],
+        },
+        "func": execute_skill,
     },
 ]

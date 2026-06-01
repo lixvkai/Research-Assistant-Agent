@@ -8,7 +8,6 @@ Agent 可以按需检索和执行已有技能，也可以从交互中学习新�
 import json
 import os
 from dataclasses import dataclass, asdict
-from config.settings import DEEPSEEK_MODEL
 
 
 SKILLS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "skills.json")
@@ -22,7 +21,14 @@ class Skill:
     steps: list[str]          # 执行步骤描述
     tools_needed: list[str]   # 需要用到的工具名
     category: str             # "literature" | "analysis" | "writing" | "general"
-    usage_count: int = 0
+    usage_count: int = 0      # 真正执行的次数
+    success_count: int = 0
+    failure_count: int = 0
+
+    @property
+    def success_rate(self) -> float:
+        total = self.success_count + self.failure_count
+        return self.success_count / total if total else 0.0
 
 
 class SkillManager:
@@ -115,11 +121,20 @@ class SkillManager:
         self._save_skills()
 
     def get_skill(self, name: str) -> Skill | None:
+        """检索技能（纯查询，不计入执行次数）。"""
+        return self.skills.get(name)
+
+    def record_execution(self, name: str, success: bool):
+        """记录一次技能执行结果，更新使用次数与成功/失败统计。"""
         skill = self.skills.get(name)
-        if skill:
-            skill.usage_count += 1
-            self._save_skills()
-        return skill
+        if skill is None:
+            return
+        skill.usage_count += 1
+        if success:
+            skill.success_count += 1
+        else:
+            skill.failure_count += 1
+        self._save_skills()
 
     def list_skills(self, category: str | None = None) -> list[Skill]:
         skills = list(self.skills.values())

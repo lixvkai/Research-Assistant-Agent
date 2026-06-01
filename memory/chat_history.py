@@ -1,6 +1,5 @@
 """对话历史持久化 — SQLite 存储多轮会话。"""
 
-import json
 import sqlite3
 import datetime
 import os

@@ -7,7 +7,7 @@ import os
 import math
 import logging
 
-from rag.document_loader import process_document, TextChunk
+from rag.document_loader import process_document
 from rag.vector_store import VectorStore
 from core.llm import chat
 

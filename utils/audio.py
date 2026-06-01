@@ -22,7 +22,6 @@ def transcribe_audio(audio_path: str) -> str:
 
     # 降级：使用本地 transformers pipeline（如果安装了 whisper）
     try:
-        import torch
         from transformers import pipeline
         pipe = pipeline("automatic-speech-recognition", model="openai/whisper-small", device="cpu")
         result = pipe(audio_path)

@@ -5,10 +5,9 @@ Memory 记忆系统
 - 长期记忆：跨会话的用户偏好、研究历史（SQLite 持久化）
 """
 
-import json
 import sqlite3
 import datetime
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from config.settings import MEMORY_DB_PATH
 from core.llm import chat
 
