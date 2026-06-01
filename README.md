@@ -2,13 +2,13 @@
 
 > 基于 **LangGraph + RAG + Multi-Agent** 的端到端科研助手，集成论文检索、知识库问答、多专家协作、自我反思和长期记忆，工具层接入 **MCP（Model Context Protocol）**，提供流式可视化的推理过程。
 
-[![Python](https://img.shields.io/badge/Python-3.10+-3776ab?logo=python&logoColor=white)](https://www.python.org/)
-[![LangGraph](https://img.shields.io/badge/Orchestration-LangGraph-1c3c3c)](https://langchain-ai.github.io/langgraph/)
-[![MCP](https://img.shields.io/badge/Tools-MCP-6b46c1)](https://modelcontextprotocol.io/)
-[![Gradio](https://img.shields.io/badge/Gradio-4.x-orange?logo=gradio)](https://gradio.app/)
-[![DeepSeek](https://img.shields.io/badge/LLM-DeepSeek-1d4ed8)](https://platform.deepseek.com/)
-[![ChromaDB](https://img.shields.io/badge/VectorDB-ChromaDB-10b981)](https://www.trychroma.com/)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](#license)
+[Python](https://www.python.org/)
+[LangGraph](https://langchain-ai.github.io/langgraph/)
+[MCP](https://modelcontextprotocol.io/)
+[Gradio](https://gradio.app/)
+[DeepSeek](https://platform.deepseek.com/)
+[ChromaDB](https://www.trychroma.com/)
+[License](#license)
 
 ---
 
@@ -29,9 +29,9 @@
 
 ## 界面预览
 
-![Main UI](docs/科研助手1.png)
+Main UI
 
-![UI presentation](docs/科研助手2.png)
+UI presentation
 
 界面三栏布局：
 
@@ -181,13 +181,15 @@ python app.py
 
 试着输入：
 
-| 类型 | 示例 |
-|------|------|
-| 论文检索 | `帮我搜索关于 retrieval-augmented generation 的最新论文` |
-| 趋势分析 | `分析 diffusion model 近 5 年的研究趋势` |
-| 知识库 QA | （先在右侧上传 PDF）`这篇论文的核心创新是什么？` |
-| 多专家协作 | `帮我设计一个关于 LLM 推理能力的研究方案` |
-| 工具组合 | `帮我搜索 transformer 论文，下载第 1 篇并总结摘要` |
+
+| 类型     | 示例                                            |
+| ------ | --------------------------------------------- |
+| 论文检索   | `帮我搜索关于 retrieval-augmented generation 的最新论文` |
+| 趋势分析   | `分析 diffusion model 近 5 年的研究趋势`               |
+| 知识库 QA | （先在右侧上传 PDF）`这篇论文的核心创新是什么？`                   |
+| 多专家协作  | `帮我设计一个关于 LLM 推理能力的研究方案`                      |
+| 工具组合   | `帮我搜索 transformer 论文，下载第 1 篇并总结摘要`            |
+
 
 观察聊天区底部的 **「推理过程」** 折叠块，可以看到 Agent 调用了哪些工具、传了什么参数。
 
@@ -271,12 +273,14 @@ TOOL_DEFINITION = {
 
 每个专家继承 `ExpertAgent`，内部持有一个独立的 `ReActAgent`，通过 `tool_categories` 类属性声明可访问的工具类别，由共享的 `MCPServer` 按 category 过滤后注入。这样每个专家拥有**领域适配的工具子集**，能在子任务中自主进行 ReAct 推理：
 
-| 专家 | 可用工具类别 |
-|------|-------------|
-| LiteratureAgent | 论文检索 / 知识库 / 文本处理 / 论文分析 / 网络工具 |
-| DataAnalysisAgent | 基础工具 / 文本处理 / 趋势分析 / 知识库 |
-| WritingAgent | 文本处理 / 知识库 / 基础工具 |
-| ReviewAgent | 文本处理 / 论文分析 / 知识库 / 基础工具 |
+
+| 专家                | 可用工具类别                          |
+| ----------------- | ------------------------------- |
+| LiteratureAgent   | 论文检索 / 知识库 / 文本处理 / 论文分析 / 网络工具 |
+| DataAnalysisAgent | 基础工具 / 文本处理 / 趋势分析 / 知识库        |
+| WritingAgent      | 文本处理 / 知识库 / 基础工具               |
+| ReviewAgent       | 文本处理 / 论文分析 / 知识库 / 基础工具        |
+
 
 > 故意不把「多Agent协作」和「记忆系统」类别分配给专家，前者避免递归调用，后者避免长期记忆被子任务污染。
 
@@ -311,32 +315,34 @@ pytest
 
 ## 技术栈
 
-| 类别 | 技术 |
-|------|------|
-| 编排 | LangGraph（StateGraph + 条件边 + 反思回环） |
-| LLM | DeepSeek（OpenAI 兼容，含 timeout + 自动重试） |
-| 工具协议 | MCP（Model Context Protocol，官方 `mcp` SDK，对外 Server + 对内 Client） |
-| 数据契约 | Pydantic v2 |
-| Embedding | `all-MiniLM-L6-v2` (Sentence-Transformers) |
-| Reranker | `BAAI/bge-reranker-base` (Cross-Encoder) |
-| 向量库 | ChromaDB（`hnsw:space=cosine` 持久化） |
-| 持久化 | SQLite |
-| Web UI | Gradio 4.x + 自定义 CSS |
-| 测试 | pytest |
-| HTTP | httpx |
-| PDF | PyPDF2 |
+
+| 类别        | 技术                                                             |
+| --------- | -------------------------------------------------------------- |
+| 编排        | LangGraph（StateGraph + 条件边 + 反思回环）                             |
+| LLM       | DeepSeek（OpenAI 兼容，含 timeout + 自动重试）                           |
+| 工具协议      | MCP（Model Context Protocol，官方 `mcp` SDK，对外 Server + 对内 Client） |
+| 数据契约      | Pydantic v2                                                    |
+| Embedding | `all-MiniLM-L6-v2` (Sentence-Transformers)                     |
+| Reranker  | `BAAI/bge-reranker-base` (Cross-Encoder)                       |
+| 向量库       | ChromaDB（`hnsw:space=cosine` 持久化）                              |
+| 持久化       | SQLite                                                         |
+| Web UI    | Gradio 4.x + 自定义 CSS                                           |
+| 测试        | pytest                                                         |
+| HTTP      | httpx                                                          |
+| PDF       | PyPDF2                                                         |
+
 
 ---
 
 ## Roadmap
 
-- [ ] RAG 嵌入去重（统一模型实例，入库/查询复用同一份编码）
-- [ ] 多用户隔离（Gradio per-session 状态）
-- [ ] 工具调用并行化（多个 tool_call 一次执行）
-- [ ] 接入更多 LLM 后端（OpenAI / Qwen / Claude）
-- [ ] 论文图谱与引用关系可视化
-- [ ] 接入 Semantic Scholar / Google Scholar 数据源
-- [ ] Docker 化部署
+- RAG 嵌入去重（统一模型实例，入库/查询复用同一份编码）
+- 多用户隔离（Gradio per-session 状态）
+- 工具调用并行化（多个 tool_call 一次执行）
+- 接入更多 LLM 后端（OpenAI / Qwen / Claude）
+- 论文图谱与引用关系可视化
+- 接入 Semantic Scholar / Google Scholar 数据源
+- Docker 化部署
 
 ---
 
