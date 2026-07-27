@@ -6,7 +6,7 @@ from core.react_agent import trim_messages
 
 def test_trim_keeps_recent():
     msgs = [{"role": "user", "content": str(i)} for i in range(10)]
-    kept, overflow = trim_messages(msgs, limit=4)
+    kept, overflow = trim_messages(msgs, limit=4, trigger=4)
     assert len(kept) == 4
     assert len(overflow) == 6
     assert kept[0]["content"] == "6"
@@ -14,7 +14,7 @@ def test_trim_keeps_recent():
 
 def test_trim_no_overflow():
     msgs = [{"role": "user", "content": "a"}]
-    kept, overflow = trim_messages(msgs, limit=5)
+    kept, overflow = trim_messages(msgs, limit=5, trigger=5)
     assert kept == msgs
     assert overflow == []
 
@@ -28,10 +28,50 @@ def test_trim_never_starts_with_orphan_tool_message():
         {"role": "tool", "tool_call_id": "2", "content": "r2"},
         {"role": "assistant", "content": "done"},
     ]
-    kept, overflow = trim_messages(msgs, limit=3)
+    kept, overflow = trim_messages(msgs, limit=3, trigger=3)
     assert kept[0]["role"] != "tool"
     assert kept[0]["content"] == "done"
     assert len(overflow) == 4
+
+
+# ── 高低水位（滞回）─────────────────────────────────────────────
+
+def test_trim_waits_for_trigger():
+    """超过低水位但没到触发线时不应裁剪 —— 这正是缓冲区的意义。"""
+    msgs = [{"role": "user", "content": str(i)} for i in range(30)]
+    kept, overflow = trim_messages(msgs, limit=25, trigger=40)
+    assert overflow == []
+    assert len(kept) == 30
+
+
+def test_trim_cuts_down_to_limit_not_trigger():
+    """一旦触发，要裁到低水位而不是停在触发线，否则下一轮立刻又越界。"""
+    msgs = [{"role": "user", "content": str(i)} for i in range(41)]
+    kept, overflow = trim_messages(msgs, limit=25, trigger=40)
+    assert len(kept) == 25
+    assert len(overflow) == 16
+
+
+def test_trim_amortizes_across_turns():
+    """压缩应被摊薄到多轮：裁剪后要能再撑几轮才触发下一次。"""
+    msgs = [{"role": "user", "content": str(i)} for i in range(41)]
+    kept, _ = trim_messages(msgs, limit=25, trigger=40)
+
+    compressions = 0
+    for _ in range(3):  # 再来 3 轮，每轮 4 条消息
+        kept.extend({"role": "user", "content": "x"} for _ in range(4))
+        kept, overflow = trim_messages(kept, limit=25, trigger=40)
+        if overflow:
+            compressions += 1
+    assert compressions == 0, "25→40 的缓冲应能覆盖至少 3 轮普通对话"
+
+
+def test_trigger_below_limit_degrades_safely():
+    """配置反了也不能每轮空转：触发线低于低水位时退化为触发即裁到低水位。"""
+    msgs = [{"role": "user", "content": str(i)} for i in range(30)]
+    kept, overflow = trim_messages(msgs, limit=25, trigger=10)
+    assert len(kept) == 25
+    assert len(overflow) == 5
 
 
 def test_overflow_goes_to_memory(monkeypatch, mkresp):
@@ -52,6 +92,7 @@ def test_overflow_goes_to_memory(monkeypatch, mkresp):
             pass
 
     monkeypatch.setattr(ra, "MAX_CONTEXT_MESSAGES", 2)
+    monkeypatch.setattr(ra, "CONTEXT_TRIM_TRIGGER", 2)
     monkeypatch.setattr(ra, "chat", lambda messages, tools=None, **kw: mkresp("ok"))
 
     agent = ra.ReActAgent(enable_reflection=False, memory_manager=FakeMemory())
@@ -59,6 +100,47 @@ def test_overflow_goes_to_memory(monkeypatch, mkresp):
         list(agent.run_iter(f"第{i}轮"))
 
     assert absorbed["msgs"], "超出窗口的消息应被短期记忆吸收"
+
+
+def test_summary_is_visible_in_the_same_turn(monkeypatch, mkresp):
+    """回归：压缩当轮就该看到新摘要。
+
+    memory_context 是进图前取的，而压缩发生在图内的 prepare。若不刷新，
+    本轮被移出窗口的消息既不在 messages 里也不在摘要里，会出现一轮的空窗。
+    """
+    sent = []
+
+    def fake_chat(messages, tools=None, **kw):
+        sent.append(messages)
+        return mkresp("ok")
+
+    class FakeMemory:
+        def __init__(self):
+            self.summary = ""
+
+        def get_context_for_prompt(self, q="", session_id=None):
+            return f"[对话历史摘要]\n{self.summary}" if self.summary else ""
+
+        def absorb_overflow(self, messages, session_id=None):
+            self.summary = "早期对话讲的是蛋白质折叠"
+
+        def record_interaction(self, *a, **kw):
+            pass
+
+        def reset_session(self, session_id=None):
+            pass
+
+    monkeypatch.setattr(ra, "MAX_CONTEXT_MESSAGES", 2)
+    monkeypatch.setattr(ra, "CONTEXT_TRIM_TRIGGER", 2)
+    monkeypatch.setattr(ra, "chat", fake_chat)
+
+    agent = ra.ReActAgent(enable_reflection=False, memory_manager=FakeMemory())
+    list(agent.run_iter("第一轮", session_id="G"))
+    sent.clear()
+    list(agent.run_iter("第二轮", session_id="G"))  # 这一轮触发压缩
+
+    joined = " ".join(m.get("content") or "" for m in sent[0])
+    assert "蛋白质折叠" in joined, "压缩当轮就应能看到刚生成的摘要"
 
 
 def test_memory_context_is_not_persisted_into_history(monkeypatch, mkresp):

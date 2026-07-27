@@ -31,9 +31,7 @@
 
 ## 界面预览
 
-![Main UI](docs/科研助手1.png)
-
-![Reasoning Trace](docs/科研助手2.png)
+Main UIReasoning Trace
 
 界面三栏布局：
 
@@ -240,42 +238,21 @@ Gradio UI 与 FastAPI 是同一个服务层（`services/`）的两个客户端�
 API 让 Agent 可以被脚本、评测流程或自定义前端调用。
 
 
-| 方法             | 路径                                      | 说明             |
-| -------------- | --------------------------------------- | -------------- |
-| `POST`         | `/api/chat/stream`                      | SSE 流式返回推理轨迹   |
-| `POST`         | `/api/chat`                             | 非流式，只返回最终答案    |
-| `GET`/`POST`   | `/api/sessions`                         | 列出 / 新建会话      |
-| `GET`/`DELETE` | `/api/sessions/{id}`                    | 会话详情（含消息）/ 删除  |
-| `GET`          | `/api/sessions/{id}/messages`           | 仅拉取会话消息列表      |
-| `POST`         | `/api/sessions/{id}/reset`              | 固化长期记忆并清空当前上下文 |
-| `GET`          | `/api/knowledge/stats`                  | 知识库统计（collection / 块数 / 文件数） |
-| `GET`/`POST`   | `/api/knowledge/documents`              | 列出 / 上传论文      |
-| `DELETE`       | `/api/knowledge/documents/{filename}`   | 按文件名删除论文及其向量块  |
-| `GET`          | `/api/tools`                            | 已注册工具列表        |
-| `GET`          | `/api/skills`                           | 技能列表（含成功率）     |
-| `GET`          | `/health`                               | 健康检查           |
+| 方法             | 路径                                    | 说明                           |
+| -------------- | ------------------------------------- | ---------------------------- |
+| `POST`         | `/api/chat/stream`                    | SSE 流式返回推理轨迹                 |
+| `POST`         | `/api/chat`                           | 非流式，只返回最终答案                  |
+| `GET`/`POST`   | `/api/sessions`                       | 列出 / 新建会话                    |
+| `GET`/`DELETE` | `/api/sessions/{id}`                  | 会话详情（含消息）/ 删除                |
+| `GET`          | `/api/sessions/{id}/messages`         | 仅拉取会话消息列表                    |
+| `POST`         | `/api/sessions/{id}/reset`            | 固化长期记忆并清空当前上下文               |
+| `GET`          | `/api/knowledge/stats`                | 知识库统计（collection / 块数 / 文件数） |
+| `GET`/`POST`   | `/api/knowledge/documents`            | 列出 / 上传论文                    |
+| `DELETE`       | `/api/knowledge/documents/{filename}` | 按文件名删除论文及其向量块                |
+| `GET`          | `/api/tools`                          | 已注册工具列表                      |
+| `GET`          | `/api/skills`                         | 技能列表（含成功率）                   |
+| `GET`          | `/health`                             | 健康检查                         |
 
-
-流式对话的事件序列与 Web UI 看到的推理轨迹一一对应：
-
-```bash
-curl -N -X POST http://localhost:8000/api/chat/stream \
-  -H 'Content-Type: application/json' \
-  -d '{"message": "帮我搜索关于 RAG 的最新论文"}'
-```
-
-```text
-event: session      data: {"session_id": 12}
-event: step_start   data: {"step": 1, "max_steps": 10}
-event: thought      data: {"content": "需要先检索 arXiv…"}
-event: action       data: {"tool": "search_arxiv", "args": {"query": "RAG"}}
-event: observation  data: {"result": "找到 5 篇论文…"}
-event: answer       data: {"content": "以下是最新进展…"}
-event: done         data: {"session_id": 12}
-```
-
-`session_id` 省略时会自动新建会话，并通过首个 `session` 事件返回。
-同一会话若已有推理在跑，再次请求返回 `409`——LangGraph 的状态不允许并发写入。
 
 ---
 
@@ -315,7 +292,7 @@ START → prepare → agent → [有 tool_calls?] ─是→ tools → agent
                                                   └─否→ finalize → END
 ```
 
-- `prepare`：按 `MAX_CONTEXT_MESSAGES` 裁剪上下文，溢出消息交给短期记忆压缩成摘要，避免「全量历史 + 摘要」双份注入；
+- `prepare`：**高低水位**裁剪上下文——消息数超过 `CONTEXT_TRIM_TRIGGER`（40）才裁，一裁就裁到 `MAX_CONTEXT_MESSAGES`（25），溢出部分交短期记忆压缩成摘要，避免「全量历史 + 摘要」双份注入；
 - `reflect` 只做质量判定；收尾统一在 `finalize`（含步数封顶时的优雅提示）；
 - LLM 调用复用 `core/llm`（不引入 langchain-openai），LangGraph 只负责编排；
 - `run_iter()` 仍是 generator，把节点更新翻译为结构化事件 `step_start → thought → action → observation → reflection → answer`，UI 实时渲染完整推理链条；
@@ -374,12 +351,14 @@ TOOL_DEFINITION = {
 
 **4 个专家**（`agents/specialists.py`，各自绑定不同的工具类别，而非共享全部工具）：
 
-| 专家 | 角色 | 可用工具类别 |
-|---|---|---|
-| `literature` | 学术文献检索与分析 | 论文检索 / 知识库 / 文本处理 / 论文分析 / 网络工具 |
-| `data_analysis` | 数据分析与可视化 | 基础工具 / 文本处理 / 趋势分析 / 知识库 |
-| `writing` | 学术写作 | 文本处理 / 知识库 / 基础工具 |
-| `review` | 质量审查与评审 | 文本处理 / 论文分析 / 知识库 / 基础工具 |
+
+| 专家              | 角色        | 可用工具类别                          |
+| --------------- | --------- | ------------------------------- |
+| `literature`    | 学术文献检索与分析 | 论文检索 / 知识库 / 文本处理 / 论文分析 / 网络工具 |
+| `data_analysis` | 数据分析与可视化  | 基础工具 / 文本处理 / 趋势分析 / 知识库        |
+| `writing`       | 学术写作      | 文本处理 / 知识库 / 基础工具               |
+| `review`        | 质量审查与评审   | 文本处理 / 论文分析 / 知识库 / 基础工具        |
+
 
 Planner LLM 输出的 JSON 由 Pydantic `Plan` 校验，专家名是 `ExpertName` 枚举，拼错会被拦下。
 下面是**某次规划的示例**——计划按任务复杂度动态生成，不要求用满 4 个专家：
@@ -417,11 +396,18 @@ Planner LLM 输出的 JSON 由 Pydantic `Plan` 校验，专家名是 `ExpertName
 
 ### 5. 三层记忆系统
 
-- **ShortTermMemory**：保存「已被移出上下文窗口」的对话摘要。滑动窗口在 ReAct 的 `prepare` 节点按 `MAX_CONTEXT_MESSAGES` 裁剪；溢出消息经 LLM 合并压缩进摘要，再注入下一轮 prompt
+- **ShortTermMemory**：保存「已被移出上下文窗口」的对话摘要。窗口由 ReAct 的 `prepare` 节点按高低水位裁剪，溢出消息经 LLM 合并压缩进摘要后立即注入本轮 prompt
 - **LongTermMemory**：SQLite，存 `preference / research_topic / interaction / finding` 四类
 - **ChatHistoryStore**：会话级持久化，支持历史会话加载、删除
 
 注入 prompt 时会拼上摘要 + 相关历史记忆 + 用户偏好三段。短期部分按会话分桶，切换会话不会串摘要。
+
+**窗口用高低水位**：超过 40 条才裁，一裁裁到 25 条。若两者相同，窗口会一直贴着阈值跑，每轮都得调一次 LLM 重做摘要，而这次调用卡在关键路径上；留出缓冲后摊薄到约每 2-3 轮一次。
+
+> 计数单位是消息条数而非对话轮数：一轮里 `agent ↔ tools` 每次往返都会追加消息，
+> 打满 `MAX_REACT_STEPS` 时单轮可产生 20+ 条。
+
+摘要在 `prepare` 生成后会立刻回填进本轮上下文，否则刚被移出窗口的消息会「这轮不在、下轮才出现」。
 
 ### 6. 自我反思（Reflexion）
 
@@ -433,7 +419,7 @@ ReAct 图与 Orchestrator 图各内置 `reflect` 节点，审查结果都是结�
 
 - **ReAct 图**：`reflect` 节点直接调 LLM 做质量判定，收尾走 `finalize`
 - **Orchestrator 图**：`reflect` 节点委托给 `ReviewAgent.review_draft()`——审查标准只维护在
-  `ReviewAgent` 一份；Planner 派发 review 子任务时则走完整 `run()`（可调工具查证）
+`ReviewAgent` 一份；Planner 派发 review 子任务时则走完整 `run()`（可调工具查证）
 
 专家 Agent 关闭反思，由 Orchestrator 层统一负责，避免子任务反思放大成本。
 

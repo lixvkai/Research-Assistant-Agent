@@ -25,6 +25,7 @@ from typing import Annotated, Any, Callable, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from config.settings import (
+    CONTEXT_TRIM_TRIGGER,
     MAX_CONTEXT_MESSAGES,
     MAX_REACT_STEPS,
     MAX_REFLECTIONS,
@@ -131,15 +132,27 @@ def _merge_messages(left: list, right: list) -> list:
     return list(left) + list(right)
 
 
-def trim_messages(messages: list[dict], limit: int | None = None) -> tuple[list[dict], list[dict]]:
-    """裁剪到最近 limit 条，返回 (保留, 溢出)。
+def trim_messages(
+    messages: list[dict],
+    limit: int | None = None,
+    trigger: int | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """高低水位裁剪，返回 (保留, 溢出)。
+
+    超过 `trigger`（高水位）才裁剪，一裁就裁到 `limit`（低水位）。两者留出的差值
+    是缓冲区：如果裁剪目标等于触发线，窗口会永远贴着阈值，每轮都要重新压缩一次摘要。
 
     切点会向后推进，避免留下没有对应 assistant.tool_calls 的孤立 tool 消息
     （那会被 OpenAI 兼容接口判为非法请求）。
     """
     if limit is None:
         limit = MAX_CONTEXT_MESSAGES
-    if limit <= 0 or len(messages) <= limit:
+    if trigger is None:
+        trigger = CONTEXT_TRIM_TRIGGER
+    # 配置反了（触发线低于裁剪目标）时退化为「触发即裁到目标」，不至于每轮空转
+    trigger = max(trigger, limit)
+
+    if limit <= 0 or len(messages) <= trigger:
         return list(messages), []
 
     cut = len(messages) - limit
@@ -250,13 +263,22 @@ class ReActAgent:
         kept, overflow = trim_messages(state["messages"])
         if not overflow:
             return {}
+
+        updates: dict = {"messages": _Replace(kept)}
         if self.memory_manager is not None:
+            session = state.get("session")
             try:
-                self.memory_manager.absorb_overflow(overflow, state.get("session"))
+                self.memory_manager.absorb_overflow(overflow, session)
+                # 摘要是在本节点才更新的，而 memory_context 在进图前就取好了。
+                # 不刷新的话，这一轮刚被移出窗口的消息既不在 messages 里、也不在
+                # 摘要里，会出现「上一轮说的事这轮忘了、下轮又想起来」的空窗。
+                updates["memory_context"] = self.memory_manager.get_context_for_prompt(
+                    state.get("question", ""), session
+                )
             except Exception as e:
                 logger.warning("压缩溢出上下文失败（忽略）：%s", e)
         logger.info("上下文窗口裁剪：移出 %d 条消息", len(overflow))
-        return {"messages": _Replace(kept)}
+        return updates
 
     def _llm_messages(self, state: _AgentState) -> list[dict]:
         """拼装本次调用的消息：system + 记忆上下文（临时） + 会话消息。"""

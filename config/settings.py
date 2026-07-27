@@ -29,9 +29,15 @@ LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))   # 瞬时错误自动�
 MAX_LLM_CALLS_PER_RUN = int(os.getenv("MAX_LLM_CALLS_PER_RUN", "60"))
 RUN_DEADLINE_SECONDS = float(os.getenv("RUN_DEADLINE_SECONDS", "600"))
 
-# ── 上下文窗口 ────────────────────────────────────────────────
-# Agent 保留的最近消息条数；溢出部分交给短期记忆压缩成摘要。
-MAX_CONTEXT_MESSAGES = int(os.getenv("MAX_CONTEXT_MESSAGES", "24"))
+# ── 上下文窗口（高低水位）──────────────────────────────────────
+# 单位是**消息条数**而非对话轮数：一轮里 agent/tools 每次往返都会追加消息，
+# 打满 MAX_REACT_STEPS 时单轮可产生 20+ 条，按轮计数无法约束上下文规模。
+#
+# 裁剪目标（低水位）：压缩后保留的最近消息条数。约等于 3~4 轮带工具调用的完整对话。
+MAX_CONTEXT_MESSAGES = int(os.getenv("MAX_CONTEXT_MESSAGES", "25"))
+# 触发线（高水位）：超过这个条数才压缩。两者之间的差值就是缓冲区——
+# 若裁剪目标即触发线，窗口会一直贴着阈值运行，导致每轮都要调一次 LLM 做摘要。
+CONTEXT_TRIM_TRIGGER = int(os.getenv("CONTEXT_TRIM_TRIGGER", "40"))
 
 # ── 并行度 ────────────────────────────────────────────────────
 TOOL_MAX_WORKERS = int(os.getenv("TOOL_MAX_WORKERS", "4"))       # 单轮多 tool_call 并行度
