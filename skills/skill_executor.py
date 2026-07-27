@@ -45,10 +45,10 @@ def _build_prompt(skill, task: str) -> str:
 def _build_agent():
     """构造一个绑定全部工具的执行 Agent（懒加载，避免循环导入）。"""
     from core.react_agent import ReActAgent
-    from core.mcp import create_default_mcp_server
+    from core.mcp import get_default_mcp_server
 
     agent = ReActAgent(system_prompt=SKILL_SYSTEM_PROMPT, enable_reflection=False)
-    create_default_mcp_server().bind_to_agent(agent)
+    get_default_mcp_server().bind_to_agent(agent)
     return agent
 
 

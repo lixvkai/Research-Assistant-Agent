@@ -52,3 +52,93 @@ class FakeAgent:
 @pytest.fixture
 def fake_agent_cls():
     return FakeAgent
+
+
+# ── 服务层 / API 测试用的桩件 ──────────────────────────────────
+
+DEFAULT_EVENTS = [
+    {"type": "step_start", "step": 1, "max_steps": 10},
+    {"type": "thought", "content": "先查一下文献", "step": 1},
+    {"type": "action", "tool": "search_arxiv", "args": {"query": "rag"}, "step": 1},
+    {"type": "observation", "result": "找到 3 篇论文", "step": 1},
+    {"type": "answer", "content": "这是最终答案"},
+]
+
+
+class StubAgent:
+    """记录调用的 ReActAgent 替身：不触发任何 LLM 请求。"""
+
+    def __init__(self, events=None):
+        self.events = list(events if events is not None else DEFAULT_EVENTS)
+        self.runs: list[tuple[str, str | None]] = []
+        self.loaded: dict[str | None, list] = {}
+        self.resets: list[str | None] = []
+
+    def run_iter(self, user_input, session_id=None):
+        self.runs.append((user_input, session_id))
+        for event in self.events:
+            yield dict(event)
+
+    def load_history(self, messages, session_id=None):
+        self.loaded[session_id] = list(messages)
+
+    def reset(self, session_id=None):
+        self.resets.append(session_id)
+
+
+class StubMemory:
+    """只需要 consolidate 的 MemoryManager 替身。"""
+
+    def __init__(self):
+        self.consolidated: list[str | None] = []
+
+    def consolidate(self, session_id=None):
+        self.consolidated.append(session_id)
+        return 0
+
+
+@pytest.fixture
+def make_service(tmp_path):
+    """构造一个用临时 SQLite + 桩 Agent 的 AgentService。"""
+    from memory.chat_history import ChatHistoryStore
+    from services.agent_service import AgentService
+
+    created = {}
+
+    def _make(events=None, tools=None):
+        agent = StubAgent(events)
+        memory = StubMemory()
+        service = AgentService(
+            agent=agent,
+            history_store=ChatHistoryStore(db_path=str(tmp_path / "chat.db")),
+            memory=memory,
+            tools=tools if tools is not None else [],
+        )
+        created.update(service=service, agent=agent, memory=memory)
+        return service
+
+    _make.state = created
+    return _make
+
+
+@pytest.fixture
+def api_client(make_service, monkeypatch):
+    """TestClient + 被替换成桩件的 AgentService 依赖。"""
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from config import settings
+    from services import get_agent_service
+
+    # 关掉预热，否则 lifespan 会去加载真实 Agent 与全部工具
+    monkeypatch.setattr(settings, "API_WARMUP", False)
+
+    from api.main import create_app
+
+    def _make(events=None):
+        service = make_service(events)
+        app = create_app()
+        app.dependency_overrides[get_agent_service] = lambda: service
+        return TestClient(app), service
+
+    return _make

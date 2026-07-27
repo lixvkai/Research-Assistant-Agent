@@ -13,15 +13,18 @@ Orchestrator — 基于 LangGraph 的多 Agent 协调器
 
 import json
 import logging
+import threading
 from typing import TypedDict
 
 from pydantic import ValidationError
 from langgraph.graph import END, START, StateGraph
 
+from core.budget import BudgetExceeded, run_budget
 from core.llm import chat
-from core.mcp import MCPServer, create_default_mcp_server
+from core.mcp import MCPServer, get_default_mcp_server
+from core.parallel import run_in_parallel
 from core.schemas import Plan, Reflection, SubTask
-from config.settings import MAX_REFLECTIONS
+from config.settings import MAX_REFLECTIONS, ORCHESTRATOR_MAX_WORKERS
 from agents.specialists import EXPERT_REGISTRY, ExpertAgent
 
 logger = logging.getLogger(__name__)
@@ -73,21 +76,23 @@ class Orchestrator:
         self._experts: dict[str, ExpertAgent] = {}
         self._mcp_server: MCPServer | None = None
         self._graph = None
+        self._expert_lock = threading.Lock()
 
     # ── 资源 ────────────────────────────────────────────────────
 
     def _get_mcp_server(self) -> MCPServer:
         if self._mcp_server is None:
-            self._mcp_server = create_default_mcp_server()
+            self._mcp_server = get_default_mcp_server()
         return self._mcp_server
 
     def _get_expert(self, name: str) -> ExpertAgent:
-        if name not in self._experts:
-            cls = EXPERT_REGISTRY.get(name)
-            if cls is None:
-                raise ValueError(f"未知专家：{name}")
-            self._experts[name] = cls(mcp_server=self._get_mcp_server())
-        return self._experts[name]
+        with self._expert_lock:
+            if name not in self._experts:
+                cls = EXPERT_REGISTRY.get(name)
+                if cls is None:
+                    raise ValueError(f"未知专家：{name}")
+                self._experts[name] = cls(mcp_server=self._get_mcp_server())
+            return self._experts[name]
 
     # ── 规划解析 ────────────────────────────────────────────────
 
@@ -148,23 +153,63 @@ class Orchestrator:
         logger.info("任务规划: %s", plan.plan_summary)
         return {"plan": plan}
 
+    @staticmethod
+    def _topo_layers(subtasks: list[SubTask]) -> list[list[int]]:
+        """按 depends_on 做拓扑分层：同层之间无依赖，可并行执行。
+
+        非法依赖（越界 / 自依赖）直接忽略；存在环时把剩余子任务放进最后一层，
+        保证不静默丢任务。
+        """
+        n = len(subtasks)
+        deps = {
+            i: {d for d in sub.depends_on if isinstance(d, int) and 0 <= d < n and d != i}
+            for i, sub in enumerate(subtasks)
+        }
+
+        resolved: set[int] = set()
+        layers: list[list[int]] = []
+        while len(resolved) < n:
+            layer = [i for i in range(n) if i not in resolved and deps[i] <= resolved]
+            if not layer:
+                remaining = [i for i in range(n) if i not in resolved]
+                logger.warning("子任务依赖存在环，剩余 %s 将按顺序兜底执行", remaining)
+                layers.append(remaining)
+                break
+            layers.append(layer)
+            resolved |= set(layer)
+        return layers
+
+    def _run_subtask(self, index: int, sub: SubTask, results: dict[int, str]) -> str:
+        expert_name = sub.expert.value
+        context = "\n\n".join(
+            f"[子任务{d}结果]\n{results[d]}" for d in sub.depends_on if d in results
+        )
+        logger.info("子任务 %d → %s: %s", index, expert_name, sub.task)
+        try:
+            result = self._get_expert(expert_name).run(sub.task, context=context)
+            logger.info("%s 完成子任务 %d", expert_name, index)
+            return result
+        except BudgetExceeded as e:
+            logger.warning("子任务 %d 因预算耗尽中止：%s", index, e)
+            return f"未执行（资源预算耗尽）：{e}"
+        except Exception as e:
+            logger.exception("子任务 %d 出错", index)
+            return f"执行出错：{e}"
+
     def _execute_node(self, state: _OrchState) -> dict:
-        """按依赖顺序调度专家。依赖结果作为下游专家的上下文。"""
+        """按依赖拓扑分层调度专家：层内并行，层间串行传递上游结果。"""
+        subtasks = state["plan"].subtasks
         results: dict[int, str] = {}
-        for i, sub in enumerate(state["plan"].subtasks):
-            expert_name = sub.expert.value
-            context_parts = [
-                f"[子任务{d}结果]\n{results[d]}" for d in sub.depends_on if d in results
-            ]
-            context = "\n\n".join(context_parts)
-            logger.info("子任务 %d → %s: %s", i, expert_name, sub.task)
-            try:
-                result = self._get_expert(expert_name).run(sub.task, context=context)
-                results[i] = result
-                logger.info("%s 完成子任务 %d", expert_name, i)
-            except Exception as e:
-                results[i] = f"执行出错：{e}"
-                logger.exception("子任务 %d 出错", i)
+
+        for layer in self._topo_layers(subtasks):
+            outputs = run_in_parallel(
+                lambda i: self._run_subtask(i, subtasks[i], results),
+                layer,
+                max_workers=ORCHESTRATOR_MAX_WORKERS,
+            )
+            for index, output in zip(layer, outputs):
+                results[index] = output
+
         return {"results": results}
 
     def _synthesize_node(self, state: _OrchState) -> dict:
@@ -254,7 +299,13 @@ class Orchestrator:
             "done": False,
             "critique": "",
         }
-        final = self._get_graph().invoke(
-            init_state, config={"recursion_limit": MAX_REFLECTIONS * 4 + 10}
-        )
+        try:
+            # 复用外层已开启的预算作用域（作为工具被调用时），独立运行时自建一个
+            with run_budget():
+                final = self._get_graph().invoke(
+                    init_state, config={"recursion_limit": MAX_REFLECTIONS * 4 + 10}
+                )
+        except BudgetExceeded as e:
+            logger.warning("多 Agent 协作因预算耗尽中止：%s", e)
+            return f"多专家协作因资源预算耗尽而中止：{e}"
         return final.get("draft", "") or "未能生成回答。"

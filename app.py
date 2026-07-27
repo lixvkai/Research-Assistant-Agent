@@ -1,11 +1,14 @@
-"""科研助手 Agent — Gradio Web UI 入口。"""
+"""科研助手 Agent — Gradio Web UI 入口。
+
+本模块只负责「渲染 + 事件接线」，业务逻辑都在 `services/`（与 FastAPI 共用同一层）。
+当前会话 id 存在 `gr.State` 里而不是模块级变量，因此多个浏览器标签/用户各自独立。
+"""
 
 import datetime
 import html
 import json
 import logging
 import os
-import shutil
 from pathlib import Path
 
 import gradio as gr
@@ -16,13 +19,14 @@ from config.settings import (
     GRADIO_SERVER_NAME,
     GRADIO_SERVER_PORT,
     LOG_LEVEL,
-    PAPERS_DIR,
 )
-from core.mcp import create_default_mcp_server
-from core.react_agent import ReActAgent
-from memory.chat_history import ChatHistoryStore
-from memory.memory_store import get_memory_manager
-from utils.path_safety import resolve_under, safe_filename
+from services import (
+    SessionBusyError,
+    SessionNotFoundError,
+    get_agent_service,
+    get_kb_service,
+)
+from services.kb_service import SUPPORTED_DOC_EXTS
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -32,25 +36,6 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
-
-
-# ── Agent lifecycle ────────────────────────────────────────────
-
-agent: ReActAgent | None = None
-mcp_tools_info: list[dict] = []
-history_store = ChatHistoryStore()
-current_session_id: int | None = None
-
-
-def init_agent() -> ReActAgent:
-    global agent, mcp_tools_info
-    # 与 tools/memory_tool 共用同一 MemoryManager 单例
-    memory = get_memory_manager()
-    agent = ReActAgent(memory_manager=memory)
-    mcp = create_default_mcp_server()
-    mcp.bind_to_agent(agent)
-    mcp_tools_info = mcp.list_tools()
-    return agent
 
 
 # ── ReAct event → Markdown rendering ─────────────────────────────
@@ -152,36 +137,43 @@ def _build_trace_details(step_events: list[dict]) -> str:
 
 # ── Chat handlers ────────────────────────────────────────────────
 
-def user_submit(message: str, history: list):
-    if not message.strip():
-        return "", history
-    global current_session_id
-    if current_session_id is None:
-        title = message.strip()[:30] + ("…" if len(message.strip()) > 30 else "")
-        current_session_id = history_store.create_session(title)
-    history_store.save_message(current_session_id, "user", message.strip())
-    return "", history + [{"role": "user", "content": message.strip()}]
+def user_submit(message: str, history: list, session_id: int | None):
+    """把用户消息显示到界面上，并确保有一个可用的会话。
+
+    消息的落库交给服务层（`stream_chat` 内完成），这里不再重复写库。
+    """
+    text = (message or "").strip()
+    if not text:
+        return "", history, session_id
+    sid = get_agent_service().ensure_session(session_id, text)
+    return "", history + [{"role": "user", "content": text}], sid
 
 
-def bot_respond(history: list):
-    """Stream agent events into the chatbot, then persist the final reply."""
+def bot_respond(history: list, session_id: int | None):
+    """把 Agent 的事件流渲染进对话框。落库由服务层负责。"""
     if not history or history[-1]["role"] != "user":
         yield history
         return
     user_msg = history[-1]["content"]
+    service = get_agent_service()
     history = history + [{"role": "assistant", "content": "⏳ 正在思考…"}]
     yield history
 
+    try:
+        guard = service.acquire_session(session_id)
+    except SessionBusyError:
+        history[-1] = {"role": "assistant", "content": "⏳ 上一条消息还在处理中，请稍候再发送。"}
+        yield history
+        return
+
     events: list[dict] = []
     step_events: list[dict] = []
-    streaming_answer = ""
     try:
-        for event in agent.run_iter(user_msg):
+        for event in service.stream_chat(session_id, user_msg):
             etype = event["type"]
             if etype == "answer_token":
-                streaming_answer = event["partial"]
                 trace = _build_trace_details(step_events)
-                history[-1] = {"role": "assistant", "content": streaming_answer + trace}
+                history[-1] = {"role": "assistant", "content": event["partial"] + trace}
                 yield history
                 continue
             events.append(event)
@@ -192,30 +184,29 @@ def bot_respond(history: list):
                 history[-1] = {"role": "assistant", "content": format_streaming(step_events)}
             yield history
     except Exception as e:
+        logger.exception("会话 %s 推理失败", session_id)
         history[-1] = {"role": "assistant", "content": f"❌ 发生错误: {e}"}
         yield history
         return
+    finally:
+        guard.release()
 
     if not any(e["type"] == "answer" for e in events):
         history[-1] = {"role": "assistant", "content": format_final(events)}
         yield history
 
-    if current_session_id and history and history[-1]["role"] == "assistant":
-        history_store.save_message(current_session_id, "assistant", history[-1]["content"])
 
-
-def handle_reset():
-    global current_session_id
-    if agent:
-        agent.reset()
-    current_session_id = None
-    return [], ""
+def handle_reset(session_id: int | None):
+    """新建对话：先把上一段会话固化进长期记忆，再清空当前会话状态。"""
+    if session_id is not None:
+        get_agent_service().reset_session(session_id)
+    return [], "", None
 
 
 # ── History sidebar handlers ────────────────────────────────────
 
 def build_history_html() -> str:
-    sessions = history_store.list_sessions(limit=20)
+    sessions = get_agent_service().list_sessions(limit=20)
     if not sessions:
         return '<div class="history-empty">暂无历史对话</div>'
     parts = ['<div class="history-section-title">历史对话</div><div class="history-list">']
@@ -246,63 +237,62 @@ def _parse_sid(value: str) -> int | None:
 
 
 def load_session(session_id_str: str):
-    global current_session_id
+    """切换历史会话。
+
+    Agent 侧不需要在这里做任何事：服务层会在该会话下一次真正对话时，
+    按需把落库的消息回灌进图状态（见 `AgentService._ensure_hydrated`）。
+    """
     sid = _parse_sid(session_id_str)
     if sid is None:
-        return [], build_history_html()
-    messages = history_store.get_messages(sid)
-    current_session_id = sid
-    if agent:
-        agent.reset()
-    return messages, build_history_html()
+        return [], build_history_html(), None
+    try:
+        messages = get_agent_service().get_messages(sid)
+    except SessionNotFoundError:
+        return [], build_history_html(), None
+    return messages, build_history_html(), sid
 
 
-def delete_session(session_id_str: str):
+def delete_session(session_id_str: str, current: int | None, history: list):
+    """删除某个会话；若删的正是当前打开的会话，同时把界面清空。"""
     sid = _parse_sid(session_id_str)
     if sid is None:
-        return build_history_html()
-    history_store.delete_session(sid)
-    return build_history_html()
+        return build_history_html(), history, current
+    try:
+        get_agent_service().delete_session(sid)
+    except SessionNotFoundError:
+        pass
+    if sid == current:
+        return build_history_html(), [], None
+    return build_history_html(), history, current
 
 
 # ── Knowledge-base handlers ──────────────────────────────────────
 
-SUPPORTED_DOC_EXTS = (".pdf", ".txt", ".md", ".tex")
-
-
-def _build_kb_html(upload_results: list[str] | None = None) -> str:
-    from tools.rag_tool import _get_engine
-    engine = _get_engine()
-    stats = engine.get_stats()
-    doc_count = stats["document_count"]
-
-    files: list[str] = []
-    if os.path.exists(PAPERS_DIR):
-        files = sorted(
-            f for f in os.listdir(PAPERS_DIR)
-            if f.lower().endswith(SUPPORTED_DOC_EXTS)
-        )
+def _build_kb_html(notices: list[str] | None = None) -> str:
+    kb = get_kb_service()
+    stats = kb.stats()
+    files = kb.list_files()
 
     parts = ['<div class="kb-panel">']
     parts.append(
         f'<div class="kb-stats">'
-        f'<span class="stat-item">📁 {len(files)} 个文件</span>'
+        f'<span class="stat-item">📁 {stats["files"]} 个文件</span>'
         f'<span class="stat-dot">·</span>'
-        f'<span class="stat-item">📊 {doc_count} 个向量块</span>'
+        f'<span class="stat-item">📊 {stats["chunks"]} 个向量块</span>'
         f'</div>'
     )
-    if upload_results:
-        for r in upload_results:
-            parts.append(f'<div class="kb-upload-ok">✅ {html.escape(r)}</div>')
+    for notice in notices or []:
+        parts.append(f'<div class="kb-upload-ok">{html.escape(notice)}</div>')
     if files:
         parts.append('<div class="kb-file-list">')
         for f in files:
-            ext = os.path.splitext(f)[1].lower()
+            name = f["name"]
+            ext = os.path.splitext(name)[1].lower()
             icon = "📄" if ext == ".pdf" else "📝"
-            name = f if len(f) <= 28 else f[:25] + "…" + ext
+            shown = name if len(name) <= 28 else name[:25] + "…" + ext
             parts.append(
                 f'<div class="kb-file"><span class="kb-file-icon">{icon}</span> '
-                f'{html.escape(name)}</div>'
+                f'{html.escape(shown)}</div>'
             )
         parts.append("</div>")
     else:
@@ -314,46 +304,28 @@ def _build_kb_html(upload_results: list[str] | None = None) -> str:
 def handle_upload(files) -> str:
     if not files:
         return _build_kb_html()
-    from tools.rag_tool import ingest_paper
-    results = []
-    file_list = files if isinstance(files, list) else [files]
-    for file_path in file_list:
-        try:
-            filename = safe_filename(os.path.basename(file_path))
-        except ValueError as e:
-            results.append(f"跳过非法文件名：{e}")
-            continue
-        dest = os.path.join(PAPERS_DIR, filename)
-        os.makedirs(PAPERS_DIR, exist_ok=True)
-        shutil.copy2(file_path, dest)
-        result = ingest_paper(dest)
-        results.append(f"**{filename}** — {result.splitlines()[1] if len(result.splitlines()) > 1 else result}")
-    return _build_kb_html(results)
+    kb = get_kb_service()
+    notices = []
+    for file_path in files if isinstance(files, list) else [files]:
+        result = kb.ingest_path(file_path)
+        if result["ok"]:
+            notices.append(f'✅ {result["filename"]} — 生成 {result["chunks"]} 个文本块')
+        else:
+            notices.append(f'❌ {result["filename"]} — {result["error"]}')
+    return _build_kb_html(notices)
 
 
 def handle_delete_file(filename: str) -> str:
     if not filename:
         return _build_kb_html()
-    try:
-        filename = safe_filename(filename)
-        fpath = resolve_under(PAPERS_DIR, filename)
-    except ValueError as e:
-        return _build_kb_html([f"删除失败：{e}"])
-    from tools.rag_tool import _get_engine
-    engine = _get_engine()
-    n = engine.delete_file(filename)
-    if os.path.exists(fpath):
-        os.remove(fpath)
-    return _build_kb_html([f"已删除 **{filename}**（{n} 个向量块）"])
+    result = get_kb_service().delete_file(filename)
+    if result["ok"]:
+        return _build_kb_html([f'✅ 已删除 {result["filename"]}（{result["chunks"]} 个向量块）'])
+    return _build_kb_html([f'❌ 删除失败：{result["error"]}'])
 
 
 def get_kb_file_choices() -> list[str]:
-    if not os.path.exists(PAPERS_DIR):
-        return []
-    return sorted(
-        f for f in os.listdir(PAPERS_DIR)
-        if f.lower().endswith(SUPPORTED_DOC_EXTS)
-    )
+    return [f["name"] for f in get_kb_service().list_files()]
 
 
 # ── Export handler ───────────────────────────────────────────────
@@ -430,12 +402,7 @@ def build_tools_html(tools: list[dict]) -> str:
 
 
 def build_skills_html() -> str:
-    try:
-        from skills.skill_manager import SkillManager
-        mgr = SkillManager()
-        skills = mgr.list_skills()
-    except Exception:
-        skills = []
+    skills = get_agent_service().list_skills()
     if not skills:
         return (
             '<div class="skills-empty">'
@@ -445,18 +412,16 @@ def build_skills_html() -> str:
         )
     parts = ['<div class="skills-list">']
     for s in skills:
-        if s.usage_count > 0:
-            badge = f"{s.usage_count}次 · 成功率{s.success_rate:.0%}"
-        else:
-            badge = "未执行"
+        used = s["usage_count"]
+        badge = f'{used}次 · 成功率{s["success_rate"]:.0%}' if used > 0 else "未执行"
         parts.append(
             f'<div class="skill-card">'
             f'<div class="skill-header">'
-            f'<span class="skill-name">{html.escape(s.name)}</span>'
+            f'<span class="skill-name">{html.escape(s["name"])}</span>'
             f'<span class="skill-badge">{html.escape(badge)}</span>'
             f"</div>"
-            f'<div class="skill-desc">{html.escape(s.description)}</div>'
-            f'<div class="skill-cat">{html.escape(s.category)}</div>'
+            f'<div class="skill-desc">{html.escape(s["description"])}</div>'
+            f'<div class="skill-cat">{html.escape(s["category"])}</div>'
             f"</div>"
         )
     parts.append("</div>")
@@ -540,11 +505,14 @@ def _read_static(name: str) -> str:
 # ── Layout ───────────────────────────────────────────────────────
 
 def create_demo() -> gr.Blocks:
-    init_agent()
-    tools_html = build_tools_html(mcp_tools_info)
+    service = get_agent_service()
+    tools_html = build_tools_html(service.list_tools())
     skills_html = build_skills_html()
 
     with gr.Blocks(title="科研助手 Agent", fill_height=True) as demo:
+        # 当前会话 id —— 每个浏览器会话一份，取代原来的模块级全局变量
+        session_state = gr.State(None)
+
         with gr.Row(equal_height=True, elem_id="main-row"):
 
             # Left sidebar: brand + new chat + history
@@ -611,19 +579,19 @@ def create_demo() -> gr.Blocks:
         gr.HTML('<div class="app-footer">Powered by DeepSeek · ReAct Framework · RAG Engine</div>')
 
         # ── Event wiring ──
-        submit_ev = msg.submit(user_submit, [msg, chatbot], [msg, chatbot])
-        submit_ev.then(bot_respond, chatbot, chatbot).then(
-            lambda: build_history_html(), outputs=[history_html],
-        )
+        for trigger in (msg.submit, send_btn.click):
+            ev = trigger(
+                user_submit,
+                [msg, chatbot, session_state],
+                [msg, chatbot, session_state],
+            )
+            ev.then(bot_respond, [chatbot, session_state], chatbot).then(
+                lambda: build_history_html(), outputs=[history_html],
+            )
 
-        click_ev = send_btn.click(user_submit, [msg, chatbot], [msg, chatbot])
-        click_ev.then(bot_respond, chatbot, chatbot).then(
-            lambda: build_history_html(), outputs=[history_html],
-        )
-
-        reset_btn.click(handle_reset, outputs=[chatbot, msg]).then(
-            lambda: build_history_html(), outputs=[history_html],
-        )
+        reset_btn.click(
+            handle_reset, [session_state], [chatbot, msg, session_state],
+        ).then(lambda: build_history_html(), outputs=[history_html])
 
         upload.change(handle_upload, inputs=[upload], outputs=[kb_status]).then(
             lambda: gr.update(choices=get_kb_file_choices()), outputs=[del_dropdown],
@@ -634,8 +602,16 @@ def create_demo() -> gr.Blocks:
 
         export_btn.click(handle_export, inputs=[chatbot], outputs=[export_btn])
 
-        session_loader.change(load_session, inputs=[session_loader], outputs=[chatbot, history_html])
-        session_deleter.change(delete_session, inputs=[session_deleter], outputs=[history_html])
+        session_loader.change(
+            load_session,
+            inputs=[session_loader],
+            outputs=[chatbot, history_html, session_state],
+        )
+        session_deleter.change(
+            delete_session,
+            inputs=[session_deleter, session_state, chatbot],
+            outputs=[history_html, chatbot, session_state],
+        )
 
     return demo
 

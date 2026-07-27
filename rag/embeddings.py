@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from typing import TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
@@ -10,19 +11,22 @@ logger = logging.getLogger(__name__)
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 
 _sentence_model = None
+_lock = threading.Lock()
 
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
 
 
 def get_sentence_model() -> "SentenceTransformer":
-    """懒加载并缓存 all-MiniLM-L6-v2。"""
+    """懒加载并缓存 all-MiniLM-L6-v2（线程安全）。"""
     global _sentence_model
     if _sentence_model is None:
-        from sentence_transformers import SentenceTransformer
+        with _lock:
+            if _sentence_model is None:
+                from sentence_transformers import SentenceTransformer
 
-        logger.info("加载嵌入模型：%s", EMBEDDING_MODEL_NAME)
-        _sentence_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+                logger.info("加载嵌入模型：%s", EMBEDDING_MODEL_NAME)
+                _sentence_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
     return _sentence_model
 
 

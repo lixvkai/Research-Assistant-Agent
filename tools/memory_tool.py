@@ -18,9 +18,12 @@ def save_user_preference(content: str) -> str:
 
 
 def recall_memories(keyword: str) -> str:
-    """搜索相关记忆。"""
+    """搜索相关记忆（分词/语义召回，自然语言描述也能命中）。"""
     mgr = get_memory_manager()
-    results = mgr.long_term.search(keyword, limit=5)
+    results = mgr.long_term.search_relevant(keyword, limit=5)
+    if not results:
+        # 兜底：仍尝试一次严格子串匹配
+        results = mgr.long_term.search(keyword, limit=5)
     if not results:
         return f"未找到与 '{keyword}' 相关的记忆。"
     lines = [f"- [{m.category} | 重要度:{m.importance}] {m.content}" for m in results]

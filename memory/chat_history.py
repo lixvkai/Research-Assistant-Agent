@@ -69,6 +69,16 @@ class ChatHistoryStore:
             ).fetchall()
         return [{"id": r[0], "title": r[1], "created_at": r[2], "updated_at": r[3]} for r in rows]
 
+    def get_session(self, session_id: int) -> dict | None:
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT id, title, created_at, updated_at FROM sessions WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {"id": row[0], "title": row[1], "created_at": row[2], "updated_at": row[3]}
+
     def get_messages(self, session_id: int) -> list[dict]:
         with sqlite3.connect(self.db_path) as conn:
             rows = conn.execute(

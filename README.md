@@ -27,11 +27,11 @@
 
 ---
 
+
+
 ## 界面预览
 
-![Main UI](docs/科研助手1.png)
-
-![Reasoning Trace](docs/科研助手2.png)
+Main UIReasoning Trace
 
 界面三栏布局：
 
@@ -41,13 +41,21 @@
 
 ---
 
+
+
 ## 架构
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                        Gradio Web UI (app.py)                    │
-│        流式推理过程展示 · 知识库管理 · 历史会话 · 文件上传       │
-└────────────────────────────┬─────────────────────────────────────┘
+┌───────────────────────────┐      ┌───────────────────────────────┐
+│   Gradio Web UI (app.py)  │      │   FastAPI (api/) · SSE 流式    │
+│ 推理轨迹 · 知识库 · 历史  │      │ /chat/stream · /sessions · … │
+└─────────────┬─────────────┘      └───────────────┬───────────────┘
+              └──────────────┬────────────────────┘
+                             │ 两个客户端共用同一服务层
+              ┌──────────────▼─────────────────────────┐
+              │       服务层 (services/)               │
+              │  会话隔离 · 并发保护 · 历史回灌        │
+              └──────────────┬─────────────────────────┘
                              │ run_iter 事件流
               ┌──────────────▼─────────────────────────┐
               │        ReAct Agent (LangGraph)         │
@@ -77,11 +85,22 @@
                                               └────────────────────┘
 ```
 
+
+
 ### 目录结构
 
 ```text
 .
-├── app.py                  # Gradio Web UI 入口
+├── app.py                  # Gradio Web UI 入口（渲染 + 事件接线）
+├── services/               # 服务层：Gradio 与 FastAPI 共用的业务逻辑
+│   ├── agent_service.py    # 会话管理 / 对话事件流 / 并发保护 / 历史回灌
+│   └── kb_service.py       # 知识库：上传 / 列举 / 删除 / 统计
+├── api/                    # FastAPI HTTP 服务
+│   ├── main.py             # 应用工厂（CORS / lifespan / 路由挂载）
+│   ├── routes/             # sessions / chat(SSE) / knowledge / meta
+│   ├── streaming.py        # 同步生成器 → 异步迭代（单线程，保住 contextvars）
+│   ├── sse.py              # Server-Sent Events 编码
+│   └── schemas.py          # HTTP 请求 / 响应模型
 ├── config/settings.py      # 全局配置（API key / 路径 / 步数 / 反思 / LLM 超时重试 / MCP_SERVERS）
 ├── core/
 │   ├── llm.py              # DeepSeek LLM 客户端（chat，含 timeout + 自动重试）
@@ -132,13 +151,19 @@
 
 ---
 
+
+
 ## 快速开始
+
+
 
 ### 1. 环境要求
 
 - Python 3.10+
 - DeepSeek API Key（[官网申请](https://platform.deepseek.com/)，新用户有免费额度）
 - 首次运行会自动下载约 400MB 的 reranker 模型 `BAAI/bge-reranker-base`
+
+
 
 ### 2. 安装
 
@@ -151,6 +176,8 @@ source .venv/bin/activate     # Windows: .venv\Scripts\activate
 
 pip install -r requirements.txt
 ```
+
+
 
 ### 3. 配置 API Key
 
@@ -167,7 +194,11 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-chat
 ```
 
+
+
 ### 4. 启动
+
+Web UI：
 
 ```bash
 python app.py
@@ -175,7 +206,59 @@ python app.py
 
 浏览器打开 `http://localhost:7860` 即可。
 
+HTTP API（可与 Web UI 独立运行）：
+
+```bash
+uvicorn api.main:app --port 8000
+```
+
+交互式接口文档在 `http://localhost:8000/docs`。
+
 ---
+
+
+
+## HTTP API
+
+Gradio UI 与 FastAPI 是同一个服务层（`services/`）的两个客户端，因此行为一致；
+API 让 Agent 可以被脚本、评测流程或自定义前端调用。
+
+
+| 方法             | 路径                                   | 说明             |
+| -------------- | ------------------------------------ | -------------- |
+| `POST`         | `/api/chat/stream`                   | SSE 流式返回推理轨迹   |
+| `POST`         | `/api/chat`                          | 非流式，只返回最终答案    |
+| `GET`/`POST`   | `/api/sessions`                      | 列出 / 新建会话      |
+| `GET`/`DELETE` | `/api/sessions/{id}`                 | 会话详情（含消息）/ 删除  |
+| `POST`         | `/api/sessions/{id}/reset`           | 固化长期记忆并清空当前上下文 |
+| `GET`/`POST`   | `/api/knowledge/documents`           | 列出 / 上传论文      |
+| `GET`          | `/api/tools`、`/api/skills`、`/health` | 元信息            |
+
+
+流式对话的事件序列与 Web UI 看到的推理轨迹一一对应：
+
+```bash
+curl -N -X POST http://localhost:8000/api/chat/stream \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "帮我搜索关于 RAG 的最新论文"}'
+```
+
+```text
+event: session      data: {"session_id": 12}
+event: step_start   data: {"step": 1, "max_steps": 10}
+event: thought      data: {"content": "需要先检索 arXiv…"}
+event: action       data: {"tool": "search_arxiv", "args": {"query": "RAG"}}
+event: observation  data: {"result": "找到 5 篇论文…"}
+event: answer       data: {"content": "以下是最新进展…"}
+event: done         data: {"session_id": 12}
+```
+
+`session_id` 省略时会自动新建会话，并通过首个 `session` 事件返回。
+同一会话若已有推理在跑，再次请求返回 `409`——LangGraph 的状态不允许并发写入。
+
+---
+
+
 
 ## 使用示例
 
@@ -195,7 +278,11 @@ python app.py
 
 ---
 
+
+
 ## 核心设计亮点
+
+
 
 ### 1. LangGraph ReAct 图 + 流式事件
 
@@ -210,6 +297,8 @@ START → agent → [有 tool_calls?] ─是→ tools → agent
 - LLM 调用复用 `core/llm`（不引入 langchain-openai），LangGraph 只负责编排；
 - `run_iter()` 仍是 generator，把节点更新翻译为结构化事件 `step_start → thought → action → observation → reflection → answer`，UI 实时渲染完整推理链条；
 - 步数封顶在 `MAX_REACT_STEPS`，超限优雅收尾，不会无限循环。
+
+
 
 ### 2. MCP（Model Context Protocol）
 
@@ -244,6 +333,8 @@ TOOL_DEFINITION = {
 }
 ```
 
+
+
 ### 3. RAG：查询改写 → 多召回 → 重排序
 
 `rag/rag_engine.py`：
@@ -256,7 +347,19 @@ TOOL_DEFINITION = {
 
 ### 4. Multi-Agent 协作（LangGraph 图）
 
-`agents/orchestrator.py` 编排为 `plan → execute → synthesize → reflect → (synthesize / END)` 状态图。Planner LLM 输出的 JSON 由 Pydantic `Plan` 校验：
+`agents/orchestrator.py` 编排为 `plan → execute → synthesize → reflect → (synthesize / END)` 状态图。
+
+**4 个专家**（`agents/specialists.py`，各自绑定不同的工具类别，而非共享全部工具）：
+
+| 专家 | 角色 | 可用工具类别 |
+|---|---|---|
+| `literature` | 学术文献检索与分析 | 论文检索 / 知识库 / 文本处理 / 论文分析 / 网络工具 |
+| `data_analysis` | 数据分析与可视化 | 基础工具 / 文本处理 / 趋势分析 / 知识库 |
+| `writing` | 学术写作 | 文本处理 / 知识库 / 基础工具 |
+| `review` | 质量审查与评审 | 文本处理 / 论文分析 / 知识库 / 基础工具 |
+
+Planner LLM 输出的 JSON 由 Pydantic `Plan` 校验，专家名是 `ExpertName` 枚举，拼错会被拦下。
+下面是**某次规划的示例**——计划按任务复杂度动态生成，不要求用满 4 个专家：
 
 ```json
 {
@@ -269,7 +372,10 @@ TOOL_DEFINITION = {
 }
 ```
 
-按 `depends_on` 顺序执行，依赖结果作为下游 Agent 的 context，`synthesize` 节点融合，`reflect` 节点对综合稿审查，不达标则带批评回到 `synthesize` 重写。
+`execute` 节点按 `depends_on` 做**拓扑分层**：同一层内互不依赖的子任务并行执行
+（`core/parallel.py`，带 contextvars 快照以保住运行预算），逐层推进；上游结果作为下游的 context。
+存在环时回退为顺序执行，不会死锁。`synthesize` 融合各专家产出，`reflect` 审查综合稿，
+不达标则带批评回到 `synthesize` 重写。
 
 每个专家继承 `ExpertAgent`，内部持有一个独立的 `ReActAgent`，通过 `tool_categories` 类属性声明可访问的工具类别，由共享的 `MCPServer` 按 category 过滤后注入。这样每个专家拥有**领域适配的工具子集**，能在子任务中自主进行 ReAct 推理：
 
@@ -283,6 +389,8 @@ TOOL_DEFINITION = {
 
 
 > 故意不把「多Agent协作」和「记忆系统」类别分配给专家，前者避免递归调用，后者避免长期记忆被子任务污染。
+
+
 
 ### 5. 三层记忆系统
 
@@ -302,6 +410,8 @@ ReAct 图与 Orchestrator 图各内置 `reflect` 节点：生成答案后由 LLM
 
 ---
 
+
+
 ## 测试
 
 ```bash
@@ -312,6 +422,8 @@ pytest
 `pytest` 套件完全离线（桩化 LLM、不需 API key），覆盖：事件契约、规划解析兜底、LangGraph 图路径（工具/反思/步数封顶/多轮记忆）、Skill 执行与成功率、calculator 安全求值、以及 MCP Client↔Server 真协议往返。
 
 ---
+
+
 
 ## 技术栈
 
@@ -327,24 +439,31 @@ pytest
 | 向量库       | ChromaDB（`hnsw:space=cosine` 持久化）                              |
 | 持久化       | SQLite                                                         |
 | Web UI    | Gradio 4.x + 自定义 CSS                                           |
+| HTTP 服务   | FastAPI + Uvicorn（SSE 流式）                                      |
 | 测试        | pytest                                                         |
-| HTTP      | httpx                                                          |
+| HTTP 客户端  | httpx                                                          |
 | PDF       | PyPDF2                                                         |
 
 
 ---
 
+
+
 ## Roadmap
 
-- RAG 嵌入去重（统一模型实例，入库/查询复用同一份编码）
-- 多用户隔离（Gradio per-session 状态）
-- 工具调用并行化（多个 tool_call 一次执行）
-- 接入更多 LLM 后端（OpenAI / Qwen / Claude）
-- 论文图谱与引用关系可视化
-- 接入 Semantic Scholar / Google Scholar 数据源
+- Human-in-the-loop：计划确认与高危工具审批（LangGraph `interrupt` / `Command(resume=)`）
+- 持久化 checkpointer（SqliteSaver），支持跨进程恢复与 time travel 调试
+- 混合检索：BM25 词法通道 + RRF 融合 + 重排分数阈值门控
+- Corrective RAG：证据不足时自动改写重试 / 降级到 arXiv 检索
+- 引用可溯源：答案里的引用跳转到 PDF 原文页并高亮
+- PDF 解析升级（PyMuPDF / GROBID）+ 章节感知分块
+- 接入 Semantic Scholar 引用图，支持多跳的「思想来源 / 被反驳」类问题
+- 接入更多 LLM 后端（OpenAI / Qwen / Claude）与模型路由
 - Docker 化部署
 
 ---
+
+
 
 ## License
 

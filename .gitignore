@@ -43,7 +43,19 @@ build/
 dist/
 *.egg-info/
 
+# ── Coverage ─────────────────────────────────────────
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
 # ── Local-only docs ──────────────────────────────────
 PROJECT_REPORT.md
 重构改动记录.md
 docs/改进建议.md
+docs/架构优化实施记录.md
+docs/后续优化设计.md
+docs/改动明细.md
+
+# ── 已撤回改动的本地存档（RAG 架构轮，可用 git apply 还原）──
+.rag-archive/

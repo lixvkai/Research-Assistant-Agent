@@ -11,6 +11,7 @@ MCP (Model Context Protocol) 工具管理层
 
 import importlib
 import logging
+import threading
 
 from core.react_agent import ReActAgent
 from core.schemas import ToolInfo, ToolSpec
@@ -95,6 +96,24 @@ class MCPServer:
     @property
     def tool_count(self) -> int:
         return len(self._tools)
+
+
+_default_server: "MCPServer | None" = None
+_default_server_lock = threading.Lock()
+
+
+def get_default_mcp_server() -> "MCPServer":
+    """进程级共享的默认 MCP Server。
+
+    工具注册是纯元数据操作且无会话状态，主 Agent / Orchestrator / 各专家 / Skill 执行
+    没有必要各建一套（此前会重复加载工具模块并重复连接外部 MCP Server）。
+    """
+    global _default_server
+    if _default_server is None:
+        with _default_server_lock:
+            if _default_server is None:
+                _default_server = create_default_mcp_server()
+    return _default_server
 
 
 def create_default_mcp_server() -> MCPServer:
