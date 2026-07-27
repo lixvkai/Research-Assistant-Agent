@@ -31,7 +31,9 @@
 
 ## 界面预览
 
-Main UIReasoning Trace
+<img src="docs/科研助手1.png" alt="Main UI" width="800"/>
+
+<img src="docs/科研助手2.png" alt="Reasoning Trace" width="800"/>
 
 界面三栏布局：
 
