@@ -1,13 +1,23 @@
 """RAG 知识库工具 — 让 Agent 可以检索本地论文库。"""
 
-from rag.rag_engine import RAGEngine
+from __future__ import annotations
 
-_engine: RAGEngine | None = None
+from typing import TYPE_CHECKING
+
+from config.settings import PAPERS_DIR
+from utils.path_safety import resolve_under
+
+if TYPE_CHECKING:
+    from rag.rag_engine import RAGEngine
+
+_engine = None
 
 
-def _get_engine() -> RAGEngine:
+def _get_engine():
     global _engine
     if _engine is None:
+        from rag.rag_engine import RAGEngine
+
         _engine = RAGEngine()
     return _engine
 
@@ -22,13 +32,18 @@ def search_knowledge_base(query: str, top_k: int = 5) -> str:
 
 
 def ingest_paper(file_path: str) -> str:
-    """将论文文件导入知识库。"""
+    """将论文文件导入知识库（仅允许 PAPERS_DIR 内的文件）。"""
+    try:
+        safe_path = resolve_under(PAPERS_DIR, file_path)
+    except ValueError as e:
+        return f"导入失败：{e}"
+
     engine = _get_engine()
     try:
-        n_chunks = engine.ingest_file(file_path)
+        n_chunks = engine.ingest_file(safe_path)
         stats = engine.get_stats()
         return (
-            f"成功导入论文：{file_path}\n"
+            f"成功导入论文：{safe_path}\n"
             f"生成 {n_chunks} 个文本块\n"
             f"知识库当前共有 {stats['document_count']} 个文档块"
         )
@@ -72,7 +87,7 @@ TOOL_DEFINITIONS = [
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "论文文件的完整路径",
+                    "description": "论文文件的完整路径（须位于 papers 目录内）",
                 },
             },
             "required": ["file_path"],

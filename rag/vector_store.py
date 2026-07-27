@@ -1,9 +1,9 @@
 """向量存储 — 基于 ChromaDB 的文档索引与检索。"""
 
 import chromadb
-from chromadb.utils import embedding_functions
 
 from config.settings import CHROMA_PERSIST_DIR
+from rag.embeddings import SharedEmbeddingFunction
 
 
 class VectorStore:
@@ -11,7 +11,7 @@ class VectorStore:
 
     def __init__(self, collection_name: str = "research_papers"):
         self.client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
-        self._ef = embedding_functions.DefaultEmbeddingFunction()
+        self._ef = SharedEmbeddingFunction()
         self.collection = self.client.get_or_create_collection(
             name=collection_name,
             embedding_function=self._ef,

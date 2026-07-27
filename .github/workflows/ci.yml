@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # CI 只装轻量依赖跑离线单测，跳过 sentence-transformers / chromadb / gradio 重量包
+          pip install "openai>=1.14,<2" "pydantic>=2,<3" "langgraph>=0.2,<1" \
+            "mcp>=1.0,<2" "httpx>=0.27,<1" "python-dotenv>=1.0,<2" \
+            "PyPDF2>=3,<4" "pytest>=8,<9" "pytest-cov>=5,<7"
+
+      - name: Run tests
+        env:
+          DEEPSEEK_API_KEY: test-key-not-used
+        run: pytest --cov=core --cov=tools --cov=utils --cov-report=term-missing

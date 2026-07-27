@@ -119,6 +119,17 @@ class LongTermMemory:
         return [MemoryEntry(id=r[0], category=r[1], content=r[2], timestamp=r[3], importance=r[4]) for r in rows]
 
 
+_default_manager: "MemoryManager | None" = None
+
+
+def get_memory_manager() -> "MemoryManager":
+    """进程级 MemoryManager 单例 — UI 与工具层共用同一份记忆。"""
+    global _default_manager
+    if _default_manager is None:
+        _default_manager = MemoryManager()
+    return _default_manager
+
+
 class MemoryManager:
     """记忆管理器 — 统一管理短期和长期记忆。"""
 

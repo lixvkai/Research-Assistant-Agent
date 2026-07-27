@@ -7,18 +7,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from rag.embeddings import get_sentence_model
+
 logger = logging.getLogger(__name__)
-
-_sentence_model = None
-
-
-def _get_sentence_model():
-    """懒加载 Sentence Transformer（复用 ChromaDB 同款模型，不额外下载）。"""
-    global _sentence_model
-    if _sentence_model is None:
-        from sentence_transformers import SentenceTransformer
-        _sentence_model = SentenceTransformer("all-MiniLM-L6-v2")
-    return _sentence_model
 
 
 @dataclass
@@ -117,7 +108,7 @@ def split_text_semantic(
         return [text.strip()]
 
     try:
-        model = _get_sentence_model()
+        model = get_sentence_model()
         embeddings = model.encode(sentences, show_progress_bar=False)
 
         similarities = []

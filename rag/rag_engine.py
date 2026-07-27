@@ -48,6 +48,8 @@ class RAGEngine:
             return 0
 
         filename = os.path.basename(file_path)
+        # 重复导入时先清掉旧块，避免固定 ID 冲突
+        self.vector_store.delete_by_source(filename)
         texts = [c.content for c in chunks]
         metadatas = [c.metadata for c in chunks]
         ids = [f"{filename}_chunk_{i}" for i in range(len(chunks))]

@@ -1,20 +1,37 @@
 """科研助手 Agent — Gradio Web UI 入口。"""
 
 import datetime
+import html
 import json
+import logging
 import os
 import shutil
 from pathlib import Path
 
 import gradio as gr
 
-from config.settings import PAPERS_DIR
+from config.settings import (
+    GRADIO_AUTH_PASSWORD,
+    GRADIO_AUTH_USERNAME,
+    GRADIO_SERVER_NAME,
+    GRADIO_SERVER_PORT,
+    LOG_LEVEL,
+    PAPERS_DIR,
+)
 from core.mcp import create_default_mcp_server
 from core.react_agent import ReActAgent
 from memory.chat_history import ChatHistoryStore
-from memory.memory_store import MemoryManager
+from memory.memory_store import get_memory_manager
+from utils.path_safety import resolve_under, safe_filename
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 
 # ── Agent lifecycle ────────────────────────────────────────────
@@ -27,7 +44,8 @@ current_session_id: int | None = None
 
 def init_agent() -> ReActAgent:
     global agent, mcp_tools_info
-    memory = MemoryManager()
+    # 与 tools/memory_tool 共用同一 MemoryManager 单例
+    memory = get_memory_manager()
     agent = ReActAgent(memory_manager=memory)
     mcp = create_default_mcp_server()
     mcp.bind_to_agent(agent)
@@ -200,19 +218,21 @@ def build_history_html() -> str:
     sessions = history_store.list_sessions(limit=20)
     if not sessions:
         return '<div class="history-empty">暂无历史对话</div>'
-    html = '<div class="history-section-title">历史对话</div><div class="history-list">'
+    parts = ['<div class="history-section-title">历史对话</div><div class="history-list">']
     for s in sessions:
-        ts = s["updated_at"][:16].replace("T", " ")
-        title = s["title"] if len(s["title"]) <= 22 else s["title"][:20] + "…"
-        html += (
-            f'<div class="history-item" data-sid="{s["id"]}">'
+        ts = html.escape(s["updated_at"][:16].replace("T", " "))
+        raw_title = s["title"] if len(s["title"]) <= 22 else s["title"][:20] + "…"
+        title = html.escape(raw_title)
+        sid = html.escape(str(s["id"]))
+        parts.append(
+            f'<div class="history-item" data-sid="{sid}">'
             f'<span class="history-title">{title}</span>'
             f'<span class="history-meta">{ts}</span>'
-            f'<button class="history-del" data-del-sid="{s["id"]}" title="删除">×</button>'
+            f'<button class="history-del" data-del-sid="{sid}" title="删除">×</button>'
             f'</div>'
         )
-    html += '</div>'
-    return html
+    parts.append("</div>")
+    return "".join(parts)
 
 
 def _parse_sid(value: str) -> int | None:
@@ -263,8 +283,8 @@ def _build_kb_html(upload_results: list[str] | None = None) -> str:
             if f.lower().endswith(SUPPORTED_DOC_EXTS)
         )
 
-    html = '<div class="kb-panel">'
-    html += (
+    parts = ['<div class="kb-panel">']
+    parts.append(
         f'<div class="kb-stats">'
         f'<span class="stat-item">📁 {len(files)} 个文件</span>'
         f'<span class="stat-dot">·</span>'
@@ -273,19 +293,22 @@ def _build_kb_html(upload_results: list[str] | None = None) -> str:
     )
     if upload_results:
         for r in upload_results:
-            html += f'<div class="kb-upload-ok">✅ {r}</div>'
+            parts.append(f'<div class="kb-upload-ok">✅ {html.escape(r)}</div>')
     if files:
-        html += '<div class="kb-file-list">'
+        parts.append('<div class="kb-file-list">')
         for f in files:
             ext = os.path.splitext(f)[1].lower()
             icon = "📄" if ext == ".pdf" else "📝"
             name = f if len(f) <= 28 else f[:25] + "…" + ext
-            html += f'<div class="kb-file"><span class="kb-file-icon">{icon}</span> {name}</div>'
-        html += '</div>'
+            parts.append(
+                f'<div class="kb-file"><span class="kb-file-icon">{icon}</span> '
+                f'{html.escape(name)}</div>'
+            )
+        parts.append("</div>")
     else:
-        html += '<div class="kb-empty">上传论文</div>'
-    html += '</div>'
-    return html
+        parts.append('<div class="kb-empty">上传论文</div>')
+    parts.append("</div>")
+    return "".join(parts)
 
 
 def handle_upload(files) -> str:
@@ -295,7 +318,11 @@ def handle_upload(files) -> str:
     results = []
     file_list = files if isinstance(files, list) else [files]
     for file_path in file_list:
-        filename = os.path.basename(file_path)
+        try:
+            filename = safe_filename(os.path.basename(file_path))
+        except ValueError as e:
+            results.append(f"跳过非法文件名：{e}")
+            continue
         dest = os.path.join(PAPERS_DIR, filename)
         os.makedirs(PAPERS_DIR, exist_ok=True)
         shutil.copy2(file_path, dest)
@@ -307,10 +334,14 @@ def handle_upload(files) -> str:
 def handle_delete_file(filename: str) -> str:
     if not filename:
         return _build_kb_html()
+    try:
+        filename = safe_filename(filename)
+        fpath = resolve_under(PAPERS_DIR, filename)
+    except ValueError as e:
+        return _build_kb_html([f"删除失败：{e}"])
     from tools.rag_tool import _get_engine
     engine = _get_engine()
     n = engine.delete_file(filename)
-    fpath = os.path.join(PAPERS_DIR, filename)
     if os.path.exists(fpath):
         os.remove(fpath)
     return _build_kb_html([f"已删除 **{filename}**（{n} 个向量块）"])
@@ -412,24 +443,24 @@ def build_skills_html() -> str:
             '<p class="skills-empty-hint">通过对话创建可复用的研究流程模板</p>'
             '</div>'
         )
-    html = '<div class="skills-list">'
+    parts = ['<div class="skills-list">']
     for s in skills:
         if s.usage_count > 0:
-            badge = f'{s.usage_count}次 · 成功率{s.success_rate:.0%}'
+            badge = f"{s.usage_count}次 · 成功率{s.success_rate:.0%}"
         else:
-            badge = '未执行'
-        html += (
+            badge = "未执行"
+        parts.append(
             f'<div class="skill-card">'
             f'<div class="skill-header">'
-            f'<span class="skill-name">{s.name}</span>'
-            f'<span class="skill-badge">{badge}</span>'
-            f'</div>'
-            f'<div class="skill-desc">{s.description}</div>'
-            f'<div class="skill-cat">{s.category}</div>'
-            f'</div>'
+            f'<span class="skill-name">{html.escape(s.name)}</span>'
+            f'<span class="skill-badge">{html.escape(badge)}</span>'
+            f"</div>"
+            f'<div class="skill-desc">{html.escape(s.description)}</div>'
+            f'<div class="skill-cat">{html.escape(s.category)}</div>'
+            f"</div>"
         )
-    html += '</div>'
-    return html
+    parts.append("</div>")
+    return "".join(parts)
 
 
 # ── Static assets & layout snippets ──────────────────────────────
@@ -611,10 +642,21 @@ def create_demo() -> gr.Blocks:
 
 if __name__ == "__main__":
     demo = create_demo()
+    auth = None
+    if GRADIO_AUTH_USERNAME and GRADIO_AUTH_PASSWORD:
+        auth = (GRADIO_AUTH_USERNAME, GRADIO_AUTH_PASSWORD)
+        logger.info("已启用 Gradio Basic Auth（用户：%s）", GRADIO_AUTH_USERNAME)
+    elif GRADIO_SERVER_NAME not in ("127.0.0.1", "localhost"):
+        logger.warning(
+            "Gradio 监听 %s 且未配置 GRADIO_AUTH_*，局域网可匿名访问；"
+            "生产环境请设置鉴权或改为 127.0.0.1",
+            GRADIO_SERVER_NAME,
+        )
     demo.launch(
-        server_name="0.0.0.0",
-        server_port=7860,
+        server_name=GRADIO_SERVER_NAME,
+        server_port=GRADIO_SERVER_PORT,
         share=False,
+        auth=auth,
         theme=THEME,
         css=_read_static("style.css"),
         head=f"<script>{_read_static('history.js')}</script>",

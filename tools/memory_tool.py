@@ -1,34 +1,25 @@
 """记忆工具 — 让 Agent 可以主动存取记忆。"""
 
-from memory.memory_store import MemoryManager
-
-_manager: MemoryManager | None = None
-
-
-def _get_manager() -> MemoryManager:
-    global _manager
-    if _manager is None:
-        _manager = MemoryManager()
-    return _manager
+from memory.memory_store import get_memory_manager
 
 
 def save_research_finding(content: str, importance: float = 0.7) -> str:
     """保存一个研究发现到长期记忆。"""
-    mgr = _get_manager()
+    mgr = get_memory_manager()
     mgr.save_finding(content, importance)
     return f"已保存研究发现：{content[:100]}..."
 
 
 def save_user_preference(content: str) -> str:
     """保存用户研究偏好。"""
-    mgr = _get_manager()
+    mgr = get_memory_manager()
     mgr.save_preference(content)
     return f"已记录用户偏好：{content}"
 
 
 def recall_memories(keyword: str) -> str:
     """搜索相关记忆。"""
-    mgr = _get_manager()
+    mgr = get_memory_manager()
     results = mgr.long_term.search(keyword, limit=5)
     if not results:
         return f"未找到与 '{keyword}' 相关的记忆。"
@@ -38,7 +29,7 @@ def recall_memories(keyword: str) -> str:
 
 def get_recent_memories() -> str:
     """获取最近的记忆。"""
-    mgr = _get_manager()
+    mgr = get_memory_manager()
     results = mgr.long_term.get_recent(limit=10)
     if not results:
         return "暂无历史记忆。"
