@@ -8,7 +8,7 @@ Orchestrator — 基于 LangGraph 的多 Agent 协调器
 - plan：LLM 规划，用 Pydantic `Plan` 校验，失败走兜底
 - execute：按依赖顺序调度专家 Agent
 - synthesize：融合各专家结果（修订时带上反思批评）
-- reflect：对融合稿自我审查，不合格则回到 synthesize 重写
+- reflect：把融合稿交给 ReviewAgent 审查，不合格则回到 synthesize 重写
 """
 
 import json
@@ -52,10 +52,6 @@ PLANNER_PROMPT = """你是一个科研任务规划专家。你的职责是将用
 """
 
 SYNTHESIS_PROMPT = "你是科研助手，请将各专家的分析结果综合成一份完整、有条理的回答。使用中文。"
-
-REFLECT_PROMPT = """你是严格的质量审查员。请评估下面这份针对原始任务的综合回答是否完整、准确、有条理。
-
-只输出 JSON：{"sufficient": true/false, "critique": "若不充分，指出具体不足"}"""
 
 
 class _OrchState(TypedDict):
@@ -245,22 +241,9 @@ class Orchestrator:
         return {"done": False, "critique": verdict.critique, "reflections": state["reflections"] + 1}
 
     def _reflect(self, task: str, draft: str) -> Reflection:
-        try:
-            resp = chat(
-                messages=[
-                    {"role": "system", "content": REFLECT_PROMPT},
-                    {"role": "user", "content": f"原始任务：\n{task}\n\n综合回答：\n{draft}"},
-                ],
-                temperature=0.2,
-            )
-            content = resp.choices[0].message.content or ""
-            start, end = content.find("{"), content.rfind("}") + 1
-            if start == -1 or end <= start:
-                return Reflection()
-            return Reflection.model_validate_json(content[start:end])
-        except Exception as e:
-            logger.warning("反思解析失败，默认通过：%s", e)
-            return Reflection()
+        """质量门委托给 ReviewAgent —— 它就是 4 个专家里负责审查的那个，
+        审查标准不再在编排层另写一套。"""
+        return self._get_expert("review").review_draft(task, draft)
 
     @staticmethod
     def _route_after_reflect(state: _OrchState) -> str:

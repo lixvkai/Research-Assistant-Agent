@@ -5,7 +5,6 @@ from pydantic import ValidationError
 
 from core.schemas import (
     Action,
-    AnswerToken,
     Plan,
     ReflectionEvent,
     StepStart,
@@ -20,9 +19,6 @@ def test_event_dump_contract():
     }
     assert Action(tool="calc", args={"x": 1}, step=2).model_dump() == {
         "type": "action", "tool": "calc", "args": {"x": 1}, "step": 2,
-    }
-    assert AnswerToken(token="a", partial="ab").model_dump() == {
-        "type": "answer_token", "token": "a", "partial": "ab",
     }
     assert ReflectionEvent(sufficient=False, critique="bad", step=3).model_dump() == {
         "type": "reflection", "sufficient": False, "critique": "bad", "step": 3,

@@ -63,12 +63,6 @@ class Observation(BaseModel):
     step: int
 
 
-class AnswerToken(BaseModel):
-    type: Literal["answer_token"] = "answer_token"
-    token: str
-    partial: str
-
-
 class Answer(BaseModel):
     type: Literal["answer"] = "answer"
     content: str
@@ -87,7 +81,7 @@ class ReflectionEvent(BaseModel):
 
 
 ReActEvent = Union[
-    StepStart, Thought, Action, Observation, AnswerToken, Answer,
+    StepStart, Thought, Action, Observation, Answer,
     ReflectionEvent, ErrorEvent,
 ]
 

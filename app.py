@@ -104,37 +104,6 @@ def format_final(events: list[dict]) -> str:
     return answer or "未能生成回答。"
 
 
-def _build_trace_details(step_events: list[dict]) -> str:
-    """Reasoning trace block appended to streamed answers."""
-    if not step_events:
-        return ""
-    parts = []
-    step_count = 0
-    for ev in step_events:
-        t = ev["type"]
-        if t == "step_start":
-            step_count += 1
-            parts.append(f"\n**步骤 {ev['step']}**\n")
-        elif t == "thought":
-            parts.append(f"> 💭 {ev['content']}\n")
-        elif t == "action":
-            args_str = json.dumps(ev["args"], ensure_ascii=False)
-            if len(args_str) > 80:
-                args_str = args_str[:80] + "…"
-            parts.append(f"🔧 `{ev['tool']}` · `{args_str}`\n")
-        elif t == "observation":
-            result = ev["result"][:200] + "…" if len(ev["result"]) > 200 else ev["result"]
-            parts.append(f"📋 {result}\n")
-        elif t == "reflection":
-            parts.append(f"🔁 自我反思：{ev['critique']}\n")
-    if not parts:
-        return ""
-    return (
-        f"\n\n<details>\n<summary>🔍 推理过程（{step_count} 步）</summary>\n\n"
-        + "\n".join(parts) + "\n</details>"
-    )
-
-
 # ── Chat handlers ────────────────────────────────────────────────
 
 def user_submit(message: str, history: list, session_id: int | None):
@@ -171,11 +140,6 @@ def bot_respond(history: list, session_id: int | None):
     try:
         for event in service.stream_chat(session_id, user_msg):
             etype = event["type"]
-            if etype == "answer_token":
-                trace = _build_trace_details(step_events)
-                history[-1] = {"role": "assistant", "content": event["partial"] + trace}
-                yield history
-                continue
             events.append(event)
             if etype == "answer":
                 history[-1] = {"role": "assistant", "content": format_final(events)}
