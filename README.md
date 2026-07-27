@@ -31,7 +31,9 @@
 
 ## 界面预览
 
-Main UIReasoning Trace
+![Main UI](docs/科研助手1.png)
+
+![Reasoning Trace](docs/科研助手2.png)
 
 界面三栏布局：
 
