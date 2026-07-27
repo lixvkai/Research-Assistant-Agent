@@ -31,9 +31,9 @@
 
 ## 界面预览
 
-<img src="docs/科研助手1.png" alt="Main UI" width="800"/>
 
-<img src="docs/科研助手2.png" alt="Reasoning Trace" width="800"/>
+
+
 
 界面三栏布局：
 
@@ -184,7 +184,7 @@
 ### 2. 安装
 
 ```bash
-git clone https://github.com/<your-username>/research-assistant-agent.git
+git clone https://github.com/lixvkai/Research-Assistant-Agent.git
 cd research-assistant-agent
 
 python -m venv .venv
