@@ -34,6 +34,12 @@ from config.settings import (
 )
 from core.budget import BudgetExceeded, run_budget
 from core.llm import chat
+from core.observability import (
+    TraceScope,
+    bind_trace_scope,
+    capture_value,
+    observe_operation,
+)
 from core.parallel import run_in_parallel
 from core.schemas import (
     Action,
@@ -106,13 +112,35 @@ class ToolRegistry:
         return list(self._schemas.values())
 
     def call(self, name: str, arguments: dict):
-        if name not in self._tools:
-            return f"错误：未找到工具 '{name}'"
-        try:
-            return self._tools[name](**arguments)
-        except Exception as e:
-            logger.exception("工具 '%s' 执行出错", name)
-            return f"工具 '{name}' 执行出错：{e}"
+        observation_type = "agent" if name == "multi_agent_collaborate" else "tool"
+        with observe_operation(
+            name,
+            as_type=observation_type,
+            input=arguments,
+            metadata={"tool_name": name},
+        ) as observation:
+            if name not in self._tools:
+                result = f"错误：未找到工具 '{name}'"
+                if observation is not None:
+                    observation.update(
+                        output=result, level="ERROR", status_message="tool not found"
+                    )
+                return result
+            try:
+                result = self._tools[name](**arguments)
+                if observation is not None:
+                    observation.update(output=capture_value(result))
+                return result
+            except Exception as e:
+                logger.exception("工具 '%s' 执行出错", name)
+                result = f"工具 '{name}' 执行出错：{e}"
+                if observation is not None:
+                    observation.update(
+                        output=capture_value(result),
+                        level="ERROR",
+                        status_message=type(e).__name__,
+                    )
+                return result
 
     @property
     def has_tools(self) -> bool:
@@ -291,7 +319,11 @@ class ReActAgent:
 
     def _agent_node(self, state: _AgentState) -> dict:
         schemas = self.tool_registry.get_schemas() if self.tool_registry.has_tools else None
-        resp = chat(messages=self._llm_messages(state), tools=schemas)
+        resp = chat(
+            messages=self._llm_messages(state),
+            tools=schemas,
+            observation_name="react-agent",
+        )
         msg = resp.choices[0].message
         return {"messages": [msg.model_dump()], "step": state["step"] + 1}
 
@@ -350,6 +382,7 @@ class ReActAgent:
                     {"role": "user", "content": f"用户问题：\n{question}\n\n待评估回答：\n{answer}"},
                 ],
                 temperature=0.2,
+                observation_name="react-reflection",
             )
             content = resp.choices[0].message.content or ""
             start, end = content.find("{"), content.rfind("}") + 1
@@ -402,7 +435,12 @@ class ReActAgent:
 
     # ── 对外接口 ────────────────────────────────────────────────
 
-    def run_iter(self, user_input: str, session_id: str | None = None):
+    def run_iter(
+        self,
+        user_input: str,
+        session_id: str | None = None,
+        trace_scope: TraceScope | None = None,
+    ):
         """Generator that yields ReAct events for UI consumption.
 
         事件类型：step_start / thought / action / observation / reflection / answer / error。
@@ -434,48 +472,89 @@ class ReActAgent:
         current_step = 0
         step_budget = MAX_REACT_STEPS
         try:
-            with run_budget():
-                for chunk in self._get_graph().stream(
-                    init_state,
-                    stream_mode="updates",
-                    config=self._thread_config(session_id),
-                ):
-                    for node, upd in chunk.items():
-                        if not upd:
-                            continue
-                        if node == "agent":
-                            current_step = upd.get("step", current_step)
-                            msg = upd["messages"][-1]
-                            yield StepStart(step=current_step, max_steps=step_budget).model_dump()
-                            tool_calls = msg.get("tool_calls")
-                            # 超预算时工具不会真正执行，故不发 action 事件，
-                            # 避免出现"有 action 无 observation"的悬空轨迹。
-                            if tool_calls and current_step >= step_budget:
-                                tool_calls = None
-                            if tool_calls:
-                                if msg.get("content"):
-                                    yield Thought(content=msg["content"], step=current_step).model_dump()
-                                for tc in tool_calls:
-                                    try:
-                                        args = json.loads(tc["function"]["arguments"])
-                                    except (json.JSONDecodeError, TypeError):
-                                        args = {}
-                                    yield Action(
-                                        tool=tc["function"]["name"], args=args, step=current_step
-                                    ).model_dump()
-                        elif node == "tools":
-                            for m in upd.get("messages", []):
-                                yield Observation(result=m["content"], step=current_step).model_dump()
-                        elif node == "reflect":
-                            step_budget = upd.get("step_budget", step_budget)
-                            if not upd.get("done") and upd.get("last_critique"):
-                                yield ReflectionEvent(
-                                    sufficient=False,
-                                    critique=upd["last_critique"],
-                                    step=current_step,
+            # Gradio 可能在不同 contextvars.Context 中逐次推进同步生成器。
+            # ContextVar 的 token 不能跨 Context reset，因此预算作用域不能跨 yield。
+            # 保留同一个预算对象，但只在每次 next(graph_stream) 期间临时绑定。
+            with run_budget() as request_budget:
+                pass
+            graph_stream = self._get_graph().stream(
+                init_state,
+                stream_mode="updates",
+                config=self._thread_config(session_id),
+            )
+            stream_done = object()
+            observation_names = {
+                "prepare": "react.prepare-context",
+                "agent": "react.generate-response",
+                "tools": "react.execute-tools",
+                "reflect": "react.evaluate-response",
+                "finalize": "react.finalize-response",
+            }
+            while True:
+                with run_budget(request_budget), bind_trace_scope(trace_scope):
+                    with observe_operation(
+                        "react-graph-step",
+                        as_type="chain",
+                        metadata={"react_step": current_step},
+                    ) as graph_observation:
+                        chunk = next(graph_stream, stream_done)
+                        if chunk is stream_done:
+                            if graph_observation is not None:
+                                graph_observation.update(name="react.complete")
+                        elif graph_observation is not None:
+                            node_names = list(chunk)
+                            stable_names = [
+                                observation_names.get(node, f"react.{node}")
+                                for node in node_names
+                            ]
+                            graph_observation.update(
+                                name="+".join(stable_names),
+                                output={"nodes": node_names},
+                            )
+                if chunk is stream_done:
+                    break
+
+                terminal_chunk = "finalize" in chunk
+                for node, upd in chunk.items():
+                    if not upd:
+                        continue
+                    if node == "agent":
+                        current_step = upd.get("step", current_step)
+                        msg = upd["messages"][-1]
+                        yield StepStart(step=current_step, max_steps=step_budget).model_dump()
+                        tool_calls = msg.get("tool_calls")
+                        # 超预算时工具不会真正执行，故不发 action 事件，
+                        # 避免出现"有 action 无 observation"的悬空轨迹。
+                        if tool_calls and current_step >= step_budget:
+                            tool_calls = None
+                        if tool_calls:
+                            if msg.get("content"):
+                                yield Thought(content=msg["content"], step=current_step).model_dump()
+                            for tc in tool_calls:
+                                try:
+                                    args = json.loads(tc["function"]["arguments"])
+                                except (json.JSONDecodeError, TypeError):
+                                    args = {}
+                                yield Action(
+                                    tool=tc["function"]["name"], args=args, step=current_step
                                 ).model_dump()
-                        elif node == "finalize":
-                            final_answer = upd.get("final_answer", final_answer)
+                    elif node == "tools":
+                        for m in upd.get("messages", []):
+                            yield Observation(result=m["content"], step=current_step).model_dump()
+                    elif node == "reflect":
+                        step_budget = upd.get("step_budget", step_budget)
+                        if not upd.get("done") and upd.get("last_critique"):
+                            yield ReflectionEvent(
+                                sufficient=False,
+                                critique=upd["last_critique"],
+                                step=current_step,
+                            ).model_dump()
+                    elif node == "finalize":
+                        final_answer = upd.get("final_answer", final_answer)
+                # finalize 直接连到 END；无需额外 next() 来发现流已耗尽，
+                # 否则会产生一个没有业务工作的 react.complete 空 observation。
+                if terminal_chunk:
+                    break
         except BudgetExceeded as e:
             logger.warning("运行预算耗尽：%s", e)
             final_answer = final_answer or f"本次请求已达资源上限（{e}），以下是已获得的部分结论。"

@@ -19,6 +19,7 @@ def compare_papers(paper1_content: str, paper2_content: str, focus: str = "") ->
         response = chat(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
+            observation_name="tool-compare-papers",
         )
         return response.choices[0].message.content
     except Exception as e:

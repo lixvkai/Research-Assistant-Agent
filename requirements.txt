@@ -1,9 +1,20 @@
 openai>=1.14.0,<2
-pydantic>=2.0,<3
+# Gradio 4.44 的 API schema 生成与 Pydantic 2.11+ 不兼容。
+pydantic>=2.7,<2.11
 langgraph>=0.2.0,<1
-mcp>=1.0.0,<2
-chromadb>=0.5.0,<1
+# LangGraph 当前版本与 Gradio 4 共存时，固定到不要求 websockets>=15 的版本。
+langsmith>=0.3.45,<0.4
+# LLM/Agent 可观测性（Langfuse Cloud，OpenTelemetry-based Python SDK v4）
+langfuse==4.14.2
+# 1.3 与 Gradio 4 所需的 Pydantic / Starlette 版本兼容。
+mcp==1.3.0
+# 现有本地知识库由 0.5 系列创建；0.6+ 的持久化格式不兼容旧集合配置。
+chromadb==0.5.23
 sentence-transformers>=3.0.0,<4
+# Chroma 0.5 锁定 tokenizers 0.20；该 Transformers 版本与之兼容。
+transformers==4.46.3
+# Chroma 0.5 的产品遥测调用使用旧版 PostHog 的位置参数签名。
+posthog==2.5.0
 PyPDF2>=3.0.0,<4
 httpx>=0.27.0,<1
 python-dotenv>=1.0.0,<2
@@ -12,6 +23,9 @@ gradio>=4.0.0,<5
 huggingface_hub>=0.19.3,<1
 # Python 3.13 从标准库移除了 audioop，而 Gradio 4 的依赖 pydub 需要它
 audioop-lts>=0.2.1; python_version >= "3.13"
-fastapi>=0.110.0,<1
-uvicorn[standard]>=0.29.0,<1
+# Gradio 4.44 与 FastAPI 0.141 / Starlette 1.x 的模板接口不兼容。
+fastapi==0.115.12
+uvicorn[standard]>=0.31.1,<0.32
+# Gradio 4 的 gradio-client 要求 websockets<13；与 MCP/uvicorn 约束取交集。
+websockets>=10,<13
 python-multipart>=0.0.9,<1

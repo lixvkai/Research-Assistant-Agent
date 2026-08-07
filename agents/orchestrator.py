@@ -22,6 +22,7 @@ from langgraph.graph import END, START, StateGraph
 from core.budget import BudgetExceeded, run_budget
 from core.llm import chat
 from core.mcp import MCPServer, get_default_mcp_server
+from core.observability import capture_value, observe_operation
 from core.parallel import run_in_parallel
 from core.schemas import Plan, Reflection, SubTask
 from config.settings import MAX_REFLECTIONS, ORCHESTRATOR_MAX_WORKERS
@@ -100,6 +101,7 @@ class Orchestrator:
                 {"role": "user", "content": task},
             ],
             temperature=0.3,
+            observation_name="orchestrator-plan",
         )
         content = response.choices[0].message.content
         return self._parse_plan(content, task)
@@ -145,9 +147,19 @@ class Orchestrator:
     # ── 图节点 ──────────────────────────────────────────────────
 
     def _plan_node(self, state: _OrchState) -> dict:
-        plan = self.plan(state["task"])
-        logger.info("任务规划: %s", plan.plan_summary)
-        return {"plan": plan}
+        with observe_operation(
+            "orchestrator.plan", as_type="chain", input=state["task"]
+        ) as observation:
+            plan = self.plan(state["task"])
+            logger.info("任务规划: %s", plan.plan_summary)
+            if observation is not None:
+                observation.update(
+                    output={
+                        "summary": plan.plan_summary,
+                        "subtask_count": len(plan.subtasks),
+                    }
+                )
+            return {"plan": plan}
 
     @staticmethod
     def _topo_layers(subtasks: list[SubTask]) -> list[list[int]]:
@@ -181,32 +193,65 @@ class Orchestrator:
             f"[子任务{d}结果]\n{results[d]}" for d in sub.depends_on if d in results
         )
         logger.info("子任务 %d → %s: %s", index, expert_name, sub.task)
-        try:
-            result = self._get_expert(expert_name).run(sub.task, context=context)
-            logger.info("%s 完成子任务 %d", expert_name, index)
-            return result
-        except BudgetExceeded as e:
-            logger.warning("子任务 %d 因预算耗尽中止：%s", index, e)
-            return f"未执行（资源预算耗尽）：{e}"
-        except Exception as e:
-            logger.exception("子任务 %d 出错", index)
-            return f"执行出错：{e}"
+        with observe_operation(
+            f"expert.{expert_name}",
+            as_type="agent",
+            input={
+                "task": sub.task,
+                "index": index,
+                "depends_on": sub.depends_on,
+            },
+        ) as observation:
+            try:
+                result = self._get_expert(expert_name).run(sub.task, context=context)
+                logger.info("%s 完成子任务 %d", expert_name, index)
+                if observation is not None:
+                    observation.update(output=capture_value(result))
+                return result
+            except BudgetExceeded as e:
+                logger.warning("子任务 %d 因预算耗尽中止：%s", index, e)
+                result = f"未执行（资源预算耗尽）：{e}"
+                if observation is not None:
+                    observation.update(
+                        output=result,
+                        level="WARNING",
+                        status_message="resource budget exhausted",
+                    )
+                return result
+            except Exception as e:
+                logger.exception("子任务 %d 出错", index)
+                result = f"执行出错：{e}"
+                if observation is not None:
+                    observation.update(
+                        output=capture_value(result),
+                        level="ERROR",
+                        status_message=type(e).__name__,
+                    )
+                return result
 
     def _execute_node(self, state: _OrchState) -> dict:
         """按依赖拓扑分层调度专家：层内并行，层间串行传递上游结果。"""
         subtasks = state["plan"].subtasks
         results: dict[int, str] = {}
+        layers = self._topo_layers(subtasks)
 
-        for layer in self._topo_layers(subtasks):
-            outputs = run_in_parallel(
-                lambda i: self._run_subtask(i, subtasks[i], results),
-                layer,
-                max_workers=ORCHESTRATOR_MAX_WORKERS,
-            )
-            for index, output in zip(layer, outputs):
-                results[index] = output
+        with observe_operation(
+            "orchestrator.execute",
+            as_type="chain",
+            input={"subtask_count": len(subtasks), "layers": layers},
+        ) as observation:
+            for layer in layers:
+                outputs = run_in_parallel(
+                    lambda i: self._run_subtask(i, subtasks[i], results),
+                    layer,
+                    max_workers=ORCHESTRATOR_MAX_WORKERS,
+                )
+                for index, output in zip(layer, outputs):
+                    results[index] = output
+            if observation is not None:
+                observation.update(output={"completed": len(results)})
 
-        return {"results": results}
+            return {"results": results}
 
     def _synthesize_node(self, state: _OrchState) -> dict:
         subtasks = state["plan"].subtasks
@@ -222,23 +267,50 @@ class Orchestrator:
         if state.get("critique"):
             user_content += f"\n\n[上一版的不足，请改进]\n{state['critique']}"
 
-        resp = chat(
-            messages=[
-                {"role": "system", "content": SYNTHESIS_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
-            temperature=0.5,
-        )
-        return {"draft": resp.choices[0].message.content}
+        with observe_operation(
+            "orchestrator.synthesize",
+            as_type="chain",
+            input={
+                "task": state["task"],
+                "result_count": len(results),
+                "revision": bool(state.get("critique")),
+            },
+        ) as observation:
+            resp = chat(
+                messages=[
+                    {"role": "system", "content": SYNTHESIS_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
+                temperature=0.5,
+                observation_name="orchestrator-synthesis",
+            )
+            draft = resp.choices[0].message.content
+            if observation is not None:
+                observation.update(output=capture_value(draft))
+            return {"draft": draft}
 
     def _reflect_node(self, state: _OrchState) -> dict:
-        if state["reflections"] >= MAX_REFLECTIONS:
-            return {"done": True}
-        verdict = self._reflect(state["task"], state["draft"])
-        if verdict.sufficient:
-            return {"done": True}
-        logger.info("综合稿未通过反思，准备修订：%s", verdict.critique)
-        return {"done": False, "critique": verdict.critique, "reflections": state["reflections"] + 1}
+        with observe_operation(
+            "orchestrator.reflect",
+            as_type="chain",
+            input={"reflection": state["reflections"]},
+        ) as observation:
+            if state["reflections"] >= MAX_REFLECTIONS:
+                result = {"done": True}
+            else:
+                verdict = self._reflect(state["task"], state["draft"])
+                if verdict.sufficient:
+                    result = {"done": True}
+                else:
+                    logger.info("综合稿未通过反思，准备修订：%s", verdict.critique)
+                    result = {
+                        "done": False,
+                        "critique": verdict.critique,
+                        "reflections": state["reflections"] + 1,
+                    }
+            if observation is not None:
+                observation.update(output=capture_value(result))
+            return result
 
     def _reflect(self, task: str, draft: str) -> Reflection:
         """质量门委托给 ReviewAgent —— 它就是 4 个专家里负责审查的那个，

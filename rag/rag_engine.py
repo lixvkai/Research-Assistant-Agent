@@ -87,6 +87,7 @@ class RAGEngine:
                     {"role": "user", "content": query},
                 ],
                 temperature=0.3,
+                observation_name="rag-query-rewrite",
             )
             rewritten = response.choices[0].message.content.strip()
             if rewritten:

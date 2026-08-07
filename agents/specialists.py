@@ -72,6 +72,7 @@ class ReviewAgent(ExpertAgent):
                     {"role": "user", "content": f"原始任务：\n{task}\n\n综合回答：\n{draft}"},
                 ],
                 temperature=0.2,
+                observation_name="expert-review",
             )
             content = resp.choices[0].message.content or ""
             start, end = content.find("{"), content.rfind("}") + 1

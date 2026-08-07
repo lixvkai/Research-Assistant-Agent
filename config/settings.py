@@ -15,6 +15,17 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
+# ── Langfuse Cloud 可观测性 ──────────────────────────────────
+LANGFUSE_ENABLED = _env_bool("LANGFUSE_ENABLED", False)
+LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY") or None
+LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY") or None
+LANGFUSE_BASE_URL = os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
+LANGFUSE_TRACING_ENVIRONMENT = os.getenv(
+    "LANGFUSE_TRACING_ENVIRONMENT", "development"
+).strip().lower()
+LANGFUSE_RELEASE = os.getenv("LANGFUSE_RELEASE", "local").strip()
+LANGFUSE_CAPTURE_CONTENT = _env_bool("LANGFUSE_CAPTURE_CONTENT", True)
+
 MAX_REACT_STEPS = int(os.getenv("MAX_REACT_STEPS", "10"))
 MAX_REFLECTIONS = int(os.getenv("MAX_REFLECTIONS", "1"))  # 自我反思最多触发的修订轮数
 # 每次反思修订额外追加的推理步数配额 —— 让反思预算与工具循环预算互不侵占

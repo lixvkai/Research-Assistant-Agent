@@ -1,9 +1,13 @@
 """pytest 共享夹具 — 提供桩化 LLM 响应，使全部测试离线可跑。"""
 
 import json
+import os
 import types
 
 import pytest
+
+# 测试套件必须完全离线；开发机 .env 即使开启 Langfuse 也不能让单测上报数据。
+os.environ["LANGFUSE_ENABLED"] = "false"
 
 
 def _make_response(content, tool_calls=None):

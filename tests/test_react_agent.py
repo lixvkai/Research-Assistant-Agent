@@ -1,6 +1,24 @@
 """ReActAgent（LangGraph）测试：工具流程 / 反思循环 / 步数封顶 / 多轮记忆。"""
 
+import contextvars
+
 import core.react_agent as ra
+
+
+def test_stream_can_resume_in_different_contexts(monkeypatch, mkresp):
+    """Gradio 会跨 Context 推进生成器，预算 token 不得跨 Context reset。"""
+
+    monkeypatch.setattr(ra, "chat", lambda *args, **kwargs: mkresp("回答"))
+    events = []
+    stream = ra.ReActAgent(enable_reflection=False).run_iter("问题")
+
+    while True:
+        try:
+            events.append(contextvars.Context().run(next, stream))
+        except StopIteration:
+            break
+
+    assert [event["type"] for event in events] == ["step_start", "answer"]
 
 
 def test_tool_then_answer(monkeypatch, mkresp, mktool):

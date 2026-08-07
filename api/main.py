@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import chat, knowledge, meta, sessions
 from config import settings
+from core.observability import shutdown_observability
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,10 @@ async def lifespan(app: FastAPI):
             logger.info("Agent 预热完成，已加载 %d 个工具", len(service.list_tools()))
         except Exception as e:
             logger.warning("Agent 预热失败（首个请求时会重试）：%s", e)
-    yield
+    try:
+        yield
+    finally:
+        shutdown_observability()
 
 
 def create_app() -> FastAPI:

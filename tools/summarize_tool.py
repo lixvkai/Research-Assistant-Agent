@@ -14,6 +14,7 @@ def summarize_text(text: str, focus: str = "") -> str:
         response = chat(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
+            observation_name="tool-summarize",
         )
         return response.choices[0].message.content
     except Exception as e:

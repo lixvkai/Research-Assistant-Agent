@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from starlette.concurrency import run_in_threadpool
 
 from api.schemas import MessageOut, SessionCreate, SessionDetailOut, SessionOut
@@ -59,7 +59,12 @@ async def get_messages(
     return [MessageOut(**m) for m in messages]
 
 
-@router.post("/{session_id}/reset", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/{session_id}/reset",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+    response_class=Response,
+)
 async def reset_session(
     session_id: int,
     service: AgentService = Depends(get_agent_service),
@@ -73,9 +78,15 @@ async def reset_session(
     except SessionNotFoundError as e:
         raise _not_found(e) from e
     await run_in_threadpool(service.reset_session, session_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{session_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+    response_class=Response,
+)
 async def delete_session(
     session_id: int,
     service: AgentService = Depends(get_agent_service),
@@ -84,3 +95,4 @@ async def delete_session(
         await run_in_threadpool(service.delete_session, session_id)
     except SessionNotFoundError as e:
         raise _not_found(e) from e
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

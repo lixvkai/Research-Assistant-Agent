@@ -20,6 +20,7 @@ from collections.abc import Iterator
 
 from memory.chat_history import ChatHistoryStore
 from memory.memory_store import get_memory_manager
+from core.observability import finish_agent_trace, start_agent_trace
 
 logger = logging.getLogger(__name__)
 
@@ -217,21 +218,41 @@ class AgentService:
         if not text:
             return
 
-        # 在唯一的写入入口校验会话，避免非法 id 产生挂不到任何会话的孤儿消息
-        self.get_session(session_id)
-        self._ensure_hydrated(session_id)
-        self._history.save_message(session_id, "user", text)
-
         answer = ""
         error = ""
-        for event in self._agent.run_iter(text, session_id=str(session_id)):
-            etype = event.get("type")
-            if etype == "answer":
-                answer = event.get("content") or ""
-            elif etype == "error":
-                error = event.get("content") or ""
-            yield event
+        final = ""
+        raised: BaseException | None = None
 
-        final = answer or (f"处理出错：{error}" if error else "")
-        if final:
-            self._history.save_message(session_id, "assistant", final)
+        # 在唯一的写入入口校验会话，避免非法 id 产生挂不到任何会话的孤儿消息
+        self.get_session(session_id)
+        trace = start_agent_trace(
+            session_id=str(session_id),
+            input=text,
+            metadata={"entrypoint": "agent-service"},
+        )
+        try:
+            self._ensure_hydrated(session_id)
+            self._history.save_message(session_id, "user", text)
+
+            if trace is None:
+                stream = self._agent.run_iter(text, session_id=str(session_id))
+            else:
+                stream = self._agent.run_iter(
+                    text, session_id=str(session_id), trace_scope=trace.scope
+                )
+            for event in stream:
+                etype = event.get("type")
+                if etype == "answer":
+                    answer = event.get("content") or ""
+                elif etype == "error":
+                    error = event.get("content") or ""
+                yield event
+
+            final = answer or (f"处理出错：{error}" if error else "")
+            if final:
+                self._history.save_message(session_id, "assistant", final)
+        except BaseException as exc:
+            raised = exc
+            raise
+        finally:
+            finish_agent_trace(trace, output=final, error=raised or error or None)

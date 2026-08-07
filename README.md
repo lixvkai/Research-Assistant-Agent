@@ -8,6 +8,7 @@
 [Gradio](https://gradio.app/)
 [DeepSeek](https://platform.deepseek.com/)
 [ChromaDB](https://www.trychroma.com/)
+[Langfuse](https://langfuse.com/)
 [License](#license)
 
 ---
@@ -23,6 +24,7 @@
 - **三层记忆系统** — 短期摘要压缩 + 长期 SQLite 持久化（用户偏好 / 研究发现）+ 多会话 ChatHistory
 - **Skills 系统（含执行引擎）** — 把常见科研工作流固化为可复用模板，可被真正"执行"驱动工具完成任务，并统计调用次数与成功率
 - **流式可视化 UI** — Gradio + 自定义 CSS，支持知识库管理、历史会话切换、对话导出
+- **端到端可观测性** — 接入 Langfuse Cloud，统一追踪 ReAct 节点、DeepSeek Generation、工具调用和 Multi-Agent 专家子任务，支持会话聚合、Token/延迟分析、错误定位与敏感信息脱敏
 - **自动化测试** — `pytest` 离线测试套件覆盖事件契约、解析兜底、图路径、反思、步数封顶、Skill 执行、MCP 往返
 
 ---
@@ -30,10 +32,6 @@
 
 
 ## 界面预览
-
-
-
-
 
 界面三栏布局：
 
@@ -109,6 +107,7 @@
 │   ├── llm.py              # DeepSeek LLM 客户端（chat，含 timeout + 自动重试）
 │   ├── schemas.py          # Pydantic 模型：Plan / ReAct 事件 / ToolSpec / Reflection
 │   ├── react_agent.py      # LangGraph ReAct 图（prepare/agent/tools/reflect/finalize）+ ToolRegistry
+│   ├── observability.py    # Langfuse：根 Trace / Observation / 脱敏 / 降级 / 生命周期
 │   ├── budget.py           # 跨嵌套 Agent 的 LLM 调用数 / 时限预算（contextvars）
 │   ├── parallel.py         # 并行执行（快照 contextvars，保住 RunBudget）
 │   ├── mcp.py              # 工具注册表 / 绑定 / 外部 MCP 工具加载
@@ -212,7 +211,25 @@ DEEPSEEK_MODEL=deepseek-chat
 
 
 
-### 4. 启动
+### 4. 配置 Langfuse Cloud 可观测性
+
+项目已接入 Langfuse Python SDK v4，可按单轮请求查看完整 Trace，包括 ReAct 节点、DeepSeek Generation、工具调用和 Multi-Agent 专家子任务；同一项目会话会通过 `session_id` 聚合。
+
+在 `.env` 中补充从 Langfuse Cloud 项目设置页取得的配置：
+
+```env
+LANGFUSE_ENABLED=true
+LANGFUSE_PUBLIC_KEY=pk-lf-your-public-key
+LANGFUSE_SECRET_KEY=sk-lf-your-secret-key
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_TRACING_ENVIRONMENT=development
+LANGFUSE_RELEASE=local
+LANGFUSE_CAPTURE_CONTENT=true
+```
+
+
+
+### 5. 启动
 
 Web UI：
 
@@ -300,44 +317,7 @@ START → prepare → agent → [有 tool_calls?] ─是→ tools → agent
 - `run_iter()` 仍是 generator，把节点更新翻译为结构化事件 `step_start → thought → action → observation → reflection → answer`，UI 实时渲染完整推理链条；
 - 步数封顶在 `MAX_REACT_STEPS`，超限优雅收尾，不会无限循环。
 
-
-
-### 2. MCP（Model Context Protocol）
-
-工具层双向打通官方 MCP 协议：
-
-- **对外（Server）**：`mcp_server/research_mcp_server.py` 用官方 SDK 把内置工具暴露为 MCP Server（stdio），可被 Cursor / Claude Desktop 等任意 MCP 客户端调用：
-
-```bash
-python -m mcp_server.research_mcp_server
-```
-
-- **对内（Client）**：`core/mcp_client.py` 连接外部 MCP Server，把其工具转成本项目工具规范并透明注册给 Agent。在 `config/settings.py` 配置即可接入：
-
-```python
-MCP_SERVERS = [
-    {"name": "filesystem", "command": "npx",
-     "args": ["-y", "@modelcontextprotocol/server-filesystem", PAPERS_DIR]},
-]
-```
-
-新增**本地内置工具**仍然零侵入——只需在工具模块暴露 `TOOL_DEFINITION(S)`，`MCPServer` 用 `importlib` 自动加载注册：
-
-```python
-# tools/your_tool.py
-def your_tool(query: str) -> str: ...
-
-TOOL_DEFINITION = {
-    "name": "your_tool",
-    "description": "...",
-    "parameters": {"type": "object", "properties": {...}, "required": [...]},
-    "func": your_tool,
-}
-```
-
-
-
-### 3. RAG：查询改写 → 多召回 → 重排序
+### 2. RAG：查询改写 → 多召回 → 重排序
 
 `rag/rag_engine.py`：
 
@@ -347,7 +327,7 @@ TOOL_DEFINITION = {
 
 加上 `rag/document_loader.py` 的**语义分块**（基于句子嵌入相似度断点），整体检索质量比单纯的固定窗口分块 + 单次召回有显著提升。
 
-### 4. Multi-Agent 协作（LangGraph 图）
+### 3. Multi-Agent 协作（LangGraph 图）
 
 `agents/orchestrator.py` 编排为 `plan → execute → synthesize → reflect → (synthesize / END)` 状态图。
 
@@ -394,9 +374,7 @@ Planner LLM 输出的 JSON 由 Pydantic `Plan` 校验，专家名是 `ExpertName
 
 > 故意不把「多Agent协作」和「记忆系统」类别分配给专家，前者避免递归调用，后者避免长期记忆被子任务污染。
 
-
-
-### 5. 三层记忆系统
+### 4. 三层记忆系统
 
 - **ShortTermMemory**：保存「已被移出上下文窗口」的对话摘要。窗口由 ReAct 的 `prepare` 节点按高低水位裁剪，溢出消息经 LLM 合并压缩进摘要后立即注入本轮 prompt
 - **LongTermMemory**：SQLite，存 `preference / research_topic / interaction / finding` 四类
@@ -410,6 +388,39 @@ Planner LLM 输出的 JSON 由 Pydantic `Plan` 校验，专家名是 `ExpertName
 > 打满 `MAX_REACT_STEPS` 时单轮可产生 20+ 条。
 
 摘要在 `prepare` 生成后会立刻回填进本轮上下文，否则刚被移出窗口的消息会「这轮不在、下轮才出现」。
+
+### 5. MCP（Model Context Protocol）
+
+工具层双向打通官方 MCP 协议：
+
+- **对外（Server）**：`mcp_server/research_mcp_server.py` 用官方 SDK 把内置工具暴露为 MCP Server（stdio），可被 Cursor / Claude Desktop 等任意 MCP 客户端调用：
+
+```bash
+python -m mcp_server.research_mcp_server
+```
+
+- **对内（Client）**：`core/mcp_client.py` 连接外部 MCP Server，把其工具转成本项目工具规范并透明注册给 Agent。在 `config/settings.py` 配置即可接入：
+
+```python
+MCP_SERVERS = [
+    {"name": "filesystem", "command": "npx",
+     "args": ["-y", "@modelcontextprotocol/server-filesystem", PAPERS_DIR]},
+]
+```
+
+新增**本地内置工具**仍然零侵入——只需在工具模块暴露 `TOOL_DEFINITION(S)`，`MCPServer` 用 `importlib` 自动加载注册：
+
+```python
+# tools/your_tool.py
+def your_tool(query: str) -> str: ...
+
+TOOL_DEFINITION = {
+    "name": "your_tool",
+    "description": "...",
+    "parameters": {"type": "object", "properties": {...}, "required": [...]},
+    "func": your_tool,
+}
+```
 
 ### 6. 自我反思（Reflexion）
 
@@ -429,6 +440,17 @@ ReAct 图与 Orchestrator 图各内置 `reflect` 节点，审查结果都是结�
 
 `skills/skill_executor.py` 把技能的"自然语言步骤 + 所需工具 + 具体任务"拼成带流程约束的提示，交给绑定全部工具的 Agent 真正执行，并按是否产出有效答案回写 `success_count / failure_count`，技能卡展示「N次 · 成功率X%」。Agent 可 `list_skills → execute_skill` 自主调用。
 
+### 8. Langfuse 端到端可观测性
+
+`core/observability.py` 是统一的观测适配层，Langfuse 不侵入业务状态，也不参与 Agent 决策：
+
+- 每条用户消息创建一个 `AGENT` 根 Trace，现有 `session_id` 直接映射为 Langfuse Session，多轮对话可聚合回放；
+- ReAct 与 Orchestrator 节点记录为动作命名的 `CHAIN`，专家子任务为 `AGENT`，普通工具为 `TOOL`；DeepSeek 通过 `langfuse.openai.OpenAI` 自动记录为 `GENERATION`，包含模型、Token 和延迟；
+- 显式传播父子关系，使并行工具、专家线程仍挂在正确节点下；观测上下文只包住单次有界计算，不跨 Gradio generator 的 `yield`，避免跨 Context 的 token 重置问题；
+- 采用 fail-open 设计：缺少配置、初始化失败或 Cloud 暂时不可达时自动退回普通 OpenAI 客户端；统一 mask API Key、Authorization 和本地用户路径，单个大结果也会截断后再上报。
+
+真实 Cloud 验收已覆盖普通问答和 `calculator` 工具链，Trace 中可以直接定位 `生成 → 工具 → 再生成 → 反思 → 收尾` 的执行路径。
+
 ---
 
 
@@ -440,7 +462,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-`pytest` 套件完全离线（桩化 LLM、不需 API key），覆盖：事件契约、规划解析兜底、LangGraph 图路径（工具/反思/步数封顶/多轮记忆）、Skill 执行与成功率、calculator 安全求值、以及 MCP Client↔Server 真协议往返。
+`pytest` 套件完全离线（桩化 LLM、不需 API key），覆盖：事件契约、规划解析兜底、LangGraph 图路径（工具/反思/步数封顶/多轮记忆）、Langfuse 脱敏与 fail-open 降级、Skill 执行与成功率、calculator 安全求值、以及 MCP Client↔Server 真协议往返。
 
 ---
 
@@ -461,6 +483,7 @@ pytest
 | 持久化       | SQLite                                                         |
 | Web UI    | Gradio 4.x + 自定义 CSS                                           |
 | HTTP 服务   | FastAPI + Uvicorn（SSE 流式）                                      |
+| 可观测性      | Langfuse Cloud + Python SDK v4（OpenTelemetry）                  |
 | 测试        | pytest                                                         |
 | HTTP 客户端  | httpx                                                          |
 | PDF       | PyPDF2                                                         |

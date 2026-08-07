@@ -473,7 +473,13 @@ def create_demo() -> gr.Blocks:
     tools_html = build_tools_html(service.list_tools())
     skills_html = build_skills_html()
 
-    with gr.Blocks(title="科研助手 Agent", fill_height=True) as demo:
+    with gr.Blocks(
+        title="科研助手 Agent",
+        fill_height=True,
+        theme=THEME,
+        css=_read_static("style.css"),
+        head=f"<script>{_read_static('history.js')}</script>",
+    ) as demo:
         # 当前会话 id —— 每个浏览器会话一份，取代原来的模块级全局变量
         session_state = gr.State(None)
 
@@ -491,6 +497,7 @@ def create_demo() -> gr.Blocks:
             # Center: chat area
             with gr.Column(scale=5, elem_id="center-col"):
                 chatbot = gr.Chatbot(
+                    type="messages",
                     height="calc(100vh - 180px)",
                     show_label=False,
                     placeholder=PLACEHOLDER_HTML,
@@ -581,6 +588,11 @@ def create_demo() -> gr.Blocks:
 
 
 if __name__ == "__main__":
+    import atexit
+
+    from core.observability import shutdown_observability
+
+    atexit.register(shutdown_observability)
     demo = create_demo()
     auth = None
     if GRADIO_AUTH_USERNAME and GRADIO_AUTH_PASSWORD:
@@ -597,7 +609,4 @@ if __name__ == "__main__":
         server_port=GRADIO_SERVER_PORT,
         share=False,
         auth=auth,
-        theme=THEME,
-        css=_read_static("style.css"),
-        head=f"<script>{_read_static('history.js')}</script>",
     )
