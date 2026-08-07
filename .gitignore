@@ -27,6 +27,8 @@ data/chroma_db/
 data/papers/*
 !data/papers/.gitkeep
 data/chat_export_*.md
+data/rag_eval/
+reports/rag_eval/
 
 # ── IDE ──────────────────────────────────────────────
 .idea/
@@ -57,6 +59,7 @@ docs/架构优化实施记录.md
 docs/后续优化设计.md
 docs/改动明细.md
 docs/LANGFUSE_CLOUD_INTEGRATION_PLAN.md
+docs/RAG_EVALUATION_PLAN.md
 
 # ── 已撤回改动的本地存档（RAG 架构轮，可用 git apply 还原）──
 .rag-archive/

@@ -61,3 +61,23 @@ class VectorStore:
             "collection": self.collection.name,
             "document_count": self.collection.count(),
         }
+
+    def list_document_ids(self) -> list[str]:
+        """返回当前 collection 的全部文档块 ID，供本地评测校验使用。"""
+        # Chroma 始终返回 ids；请求 metadata 可兼容不接受空 include 的版本，
+        # 同时避免读取文档正文与向量。
+        return list(self.collection.get(include=["metadatas"])["ids"])
+
+    def list_documents(self) -> list[dict]:
+        """返回评测数据生成所需的文档块正文与元数据。"""
+        results = self.collection.get(include=["documents", "metadatas"])
+        documents = results.get("documents") or []
+        metadatas = results.get("metadatas") or []
+        return [
+            {
+                "id": document_id,
+                "content": documents[index] or "",
+                "metadata": metadatas[index] or {},
+            }
+            for index, document_id in enumerate(results.get("ids") or [])
+        ]

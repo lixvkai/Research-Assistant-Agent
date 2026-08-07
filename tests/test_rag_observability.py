@@ -82,6 +82,18 @@ def test_vector_store_search_exposes_distance_similarity_and_rank():
     assert docs[1]["recall_rank"] == 2
 
 
+def test_vector_store_lists_ids_without_loading_document_bodies():
+    store = VectorStore.__new__(VectorStore)
+
+    def fake_get(**kwargs):
+        assert kwargs == {"include": ["metadatas"]}
+        return {"ids": ["chunk-1", "chunk-2"]}
+
+    store.collection = types.SimpleNamespace(get=fake_get)
+
+    assert store.list_document_ids() == ["chunk-1", "chunk-2"]
+
+
 def test_retrieve_records_rewrite_recall_and_rerank_metrics(monkeypatch):
     observations: list[FakeObservation] = []
 
@@ -192,4 +204,3 @@ def test_rewrite_failure_records_fallback(monkeypatch):
     update = observations[-1].updates[-1]
     assert update["level"] == "WARNING"
     assert update["metadata"] == {"changed": False, "fallback": True}
-

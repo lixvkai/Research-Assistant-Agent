@@ -461,6 +461,30 @@ ReAct 图与 Orchestrator 图各内置 `reflect` 节点，审查结果都是结�
 
 真实 Cloud 验收已覆盖普通问答和 `calculator` 工具链，Trace 中可以直接定位 `生成 → 工具 → 再生成 → 反思 → 收尾` 的执行路径。
 
+### 9. RAG 检索效果评测
+
+项目提供独立的本地 RAG 检索评测框架，用于量化查询改写、向量召回和 Cross-Encoder 重排序各阶段的实际贡献，不评价最终生成答案，也不依赖 Langfuse Dataset 或 LLM Judge：
+
+- 支持 `Vector Baseline`、`Rewrite + Vector`、`Vector + Rerank`、`Full Pipeline` 四组消融实验；
+- 统一计算 `Recall@20`、`Hit@5`、`MRR@5`、`nDCG@5`，并记录各阶段 P50/P95 延迟、空召回率和 fallback 比例；
+- 保存原始 Query、改写 Query、Gold 文档块、Cosine distance、similarity、召回排名及 rerank 前后分数与排名；
+- 可使用 DeepSeek 从本地知识块生成合成检索问题，自动过滤低信息块、校验证据锚点、去重并支持断点续跑；
+- 单条 Query 失败不会中断整轮实验，每组实验都会输出汇总 JSON、逐题明细和失败案例报告。
+
+评测代码位于 `evaluation/rag/`，统一命令入口为 `scripts/evaluate_rag.py`：
+
+```bash
+# 校验评测数据与当前 Chroma 知识库是否一致
+python scripts/evaluate_rag.py validate
+
+# 运行全部四组检索实验
+python scripts/evaluate_rag.py run
+
+# 只运行指定实验
+python scripts/evaluate_rag.py run --experiment vector_rerank
+```
+
+
 ---
 
 
