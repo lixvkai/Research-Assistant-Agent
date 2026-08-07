@@ -395,59 +395,42 @@ def build_skills_html() -> str:
 # ── Static assets & layout snippets ──────────────────────────────
 
 PLACEHOLDER_HTML = """
-<div style="
-    display:flex;flex-direction:column;align-items:center;justify-content:center;
-    padding:48px 24px;height:100%;min-height:400px;
-    font-family:'Inter',system-ui,sans-serif;
-">
-    <div style="font-size:2.2em;margin-bottom:6px;">🔬</div>
-    <p style="font-size:1.8em;font-weight:700;color:#1E293B;margin:0 0 4px;
-        letter-spacing:-0.02em;">科研助手</p>
-    <p style="font-size:0.88em;color:#94A3B8;margin:0 0 32px;font-weight:400;">
-        基于 ReAct + DeepSeek 的智能研究助手，在下方输入框提问即可开始</p>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;
-        max-width:520px;width:100%;">
-        <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:12px;
-            padding:22px 16px;text-align:center;">
-            <div style="font-size:1.6em;margin-bottom:6px;">📄</div>
-            <div style="font-size:0.9em;font-weight:600;color:#334155;">论文检索</div>
-            <div style="font-size:0.72em;color:#94A3B8;margin-top:4px;">搜索 arXiv 学术数据库</div>
+<div class="empty-state">
+    <div class="empty-state-icon">🔬</div>
+    <p class="empty-state-title">科研助手</p>
+    <p class="empty-state-subtitle">
+        基于 LangGraph 与 Multi-Agent 架构的智能科研助手，在下方输入框提问即可开始</p>
+    <div class="capability-grid">
+        <div class="capability-card">
+            <div class="capability-icon">📄</div>
+            <div class="capability-title">论文检索</div>
+            <div class="capability-desc">搜索 arXiv 学术数据库</div>
         </div>
-        <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:12px;
-            padding:22px 16px;text-align:center;">
-            <div style="font-size:1.6em;margin-bottom:6px;">📝</div>
-            <div style="font-size:0.9em;font-weight:600;color:#334155;">智能摘要</div>
-            <div style="font-size:0.72em;color:#94A3B8;margin-top:4px;">快速提炼论文核心内容</div>
+        <div class="capability-card">
+            <div class="capability-icon">📝</div>
+            <div class="capability-title">智能摘要</div>
+            <div class="capability-desc">快速提炼论文核心内容</div>
         </div>
-        <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:12px;
-            padding:22px 16px;text-align:center;">
-            <div style="font-size:1.6em;margin-bottom:6px;">📚</div>
-            <div style="font-size:0.9em;font-weight:600;color:#334155;">知识库问答</div>
-            <div style="font-size:0.72em;color:#94A3B8;margin-top:4px;">基于本地论文库语义检索</div>
+        <div class="capability-card">
+            <div class="capability-icon">📚</div>
+            <div class="capability-title">知识库问答</div>
+            <div class="capability-desc">基于本地论文库语义检索</div>
         </div>
-        <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:12px;
-            padding:22px 16px;text-align:center;">
-            <div style="font-size:1.6em;margin-bottom:6px;">🤝</div>
-            <div style="font-size:0.9em;font-weight:600;color:#334155;">多专家协作</div>
-            <div style="font-size:0.72em;color:#94A3B8;margin-top:4px;">多 Agent 协同深度分析</div>
+        <div class="capability-card">
+            <div class="capability-icon">🤝</div>
+            <div class="capability-title">多专家协作</div>
+            <div class="capability-desc">多 Agent 协同深度分析</div>
         </div>
     </div>
-    <div style="margin-top:28px;display:flex;gap:8px;flex-wrap:wrap;justify-content:center;">
-        <span style="font-size:0.68em;color:#CBD5E1;padding:4px 12px;
-            border:1px solid #E2E8F0;border-radius:12px;">ReAct</span>
-        <span style="font-size:0.68em;color:#CBD5E1;padding:4px 12px;
-            border:1px solid #E2E8F0;border-radius:12px;">DeepSeek</span>
-        <span style="font-size:0.68em;color:#CBD5E1;padding:4px 12px;
-            border:1px solid #E2E8F0;border-radius:12px;">RAG</span>
-        <span style="font-size:0.68em;color:#CBD5E1;padding:4px 12px;
-            border:1px solid #E2E8F0;border-radius:12px;">Memory</span>
+    <div class="tech-tags">
+        <span>ReAct</span><span>DeepSeek</span><span>RAG</span><span>Memory</span>
     </div>
 </div>
 """
 
 BRAND_HTML = (
     '<div class="brand-bar">'
-    '<span class="brand-logo"></span>'
+    '<span class="brand-logo">🔬</span>'
     '<span class="brand-text">科研助手</span>'
     '<span class="brand-ver">Research Agent</span>'
     '</div>'
@@ -498,38 +481,48 @@ def create_demo() -> gr.Blocks:
             with gr.Column(scale=5, elem_id="center-col"):
                 chatbot = gr.Chatbot(
                     type="messages",
-                    height="calc(100vh - 180px)",
+                    height="100%",
                     show_label=False,
                     placeholder=PLACEHOLDER_HTML,
+                    elem_id="chatbot",
                 )
-                with gr.Row(elem_id="input-row"):
-                    msg = gr.Textbox(
-                        placeholder="输入你的问题，按 Enter 发送…",
-                        show_label=False, scale=10, container=False,
-                        autofocus=True, elem_id="msg-box",
+                with gr.Column(elem_id="composer"):
+                    with gr.Row(elem_id="input-row"):
+                        msg = gr.Textbox(
+                            placeholder="输入你的问题，按 Enter 发送…",
+                            show_label=False, scale=10, container=False,
+                            autofocus=True, elem_id="msg-box",
+                        )
+                        send_btn = gr.Button(
+                            "发送", variant="primary", scale=1,
+                            min_width=72, elem_id="send-btn",
+                        )
+                        export_btn = gr.DownloadButton(
+                            "导出", variant="secondary", scale=1,
+                            min_width=64, elem_id="export-btn",
+                        )
+                    gr.HTML('<div class="quick-prompts-title">快速提问</div>')
+                    gr.Examples(
+                        examples=[
+                            "帮我搜索关于大语言模型的最新论文",
+                            "分析 RAG 领域的研究趋势",
+                            "计算 sqrt(144) + log(100)",
+                            "帮我对知识库中的论文做个总结",
+                        ],
+                        inputs=msg, label=None, elem_id="examples-row",
                     )
-                    send_btn = gr.Button("发送 →", variant="primary", scale=1, min_width=80, elem_id="send-btn")
-                    export_btn = gr.DownloadButton("📥 导出", variant="secondary", scale=1, min_width=72, elem_id="export-btn")
-                gr.Examples(
-                    examples=[
-                        "帮我搜索关于大语言模型的最新论文",
-                        "分析 RAG 领域的研究趋势",
-                        "计算 sqrt(144) + log(100)",
-                        "帮我对知识库中的论文做个总结",
-                    ],
-                    inputs=msg, label="💡 快速提问", elem_id="examples-row",
-                )
 
             # Right sidebar: knowledge / tools / skills
             with gr.Column(scale=2, min_width=240, elem_id="right-sidebar"):
-                with gr.Tabs():
+                with gr.Tabs(elem_id="resource-tabs"):
                     with gr.Tab("📚 知识库"):
                         kb_status = gr.HTML(value=_build_kb_html())
+                        gr.HTML('<div class="panel-section-title">添加文档</div>')
                         upload = gr.File(
                             label=None, show_label=False,
                             file_types=list(SUPPORTED_DOC_EXTS),
                             file_count="multiple", type="filepath",
-                            elem_classes=["upload-area"],
+                            elem_id="kb-upload", elem_classes=["upload-area"],
                         )
                         with gr.Row(elem_classes=["kb-delete-row"]):
                             del_dropdown = gr.Dropdown(

@@ -5,8 +5,6 @@ import re
 import logging
 from dataclasses import dataclass
 
-import numpy as np
-
 from rag.embeddings import get_sentence_model
 
 logger = logging.getLogger(__name__)
@@ -99,6 +97,10 @@ def split_text_semantic(
       5. 同时遵守 max_chunk_size 上限
     失败时自动回退到固定窗口分块。
     """
+    # NumPy 只在真正执行语义分块时需要。保持模块本身可被轻量 CI 和
+    # 不启用 RAG 的运行入口导入，避免测试收集阶段加载整套模型依赖。
+    import numpy as np
+
     sentences = _split_into_sentences(text)
 
     if len(sentences) <= 1:

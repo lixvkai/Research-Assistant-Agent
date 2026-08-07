@@ -1,8 +1,5 @@
 """向量存储 — 基于 ChromaDB 的文档索引与检索。"""
 
-import chromadb
-from chromadb.config import Settings
-
 from config.settings import CHROMA_PERSIST_DIR
 from rag.embeddings import SharedEmbeddingFunction
 
@@ -11,6 +8,11 @@ class VectorStore:
     """封装 ChromaDB，提供文档索引和语义检索。"""
 
     def __init__(self, collection_name: str = "research_papers"):
+        # ChromaDB 只在创建真实向量库时加载。这样纯检索结果转换测试不必
+        # 在 GitHub Actions 中安装重量级 RAG 运行依赖。
+        import chromadb
+        from chromadb.config import Settings
+
         # 本地向量库不需要向 Chroma 发送匿名产品遥测；同时避免其与新版
         # PostHog SDK 的接口差异干扰应用启动。
         self.client = chromadb.PersistentClient(
