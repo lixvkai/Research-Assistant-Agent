@@ -317,6 +317,8 @@ START → prepare → agent → [有 tool_calls?] ─是→ tools → agent
 - `run_iter()` 仍是 generator，把节点更新翻译为结构化事件 `step_start → thought → action → observation → reflection → answer`，UI 实时渲染完整推理链条；
 - 步数封顶在 `MAX_REACT_STEPS`，超限优雅收尾，不会无限循环。
 
+
+
 ### 2. RAG：查询改写 → 多召回 → 重排序
 
 `rag/rag_engine.py`：
@@ -374,6 +376,8 @@ Planner LLM 输出的 JSON 由 Pydantic `Plan` 校验，专家名是 `ExpertName
 
 > 故意不把「多Agent协作」和「记忆系统」类别分配给专家，前者避免递归调用，后者避免长期记忆被子任务污染。
 
+
+
 ### 4. 三层记忆系统
 
 - **ShortTermMemory**：保存「已被移出上下文窗口」的对话摘要。窗口由 ReAct 的 `prepare` 节点按高低水位裁剪，溢出消息经 LLM 合并压缩进摘要后立即注入本轮 prompt
@@ -421,6 +425,8 @@ TOOL_DEFINITION = {
     "func": your_tool,
 }
 ```
+
+
 
 ### 6. 自我反思（Reflexion）
 

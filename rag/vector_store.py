@@ -34,10 +34,14 @@ class VectorStore:
 
         docs = []
         for i in range(len(results["documents"][0])):
+            distance = float(results["distances"][0][i])
             docs.append({
+                "id": results["ids"][0][i],
                 "content": results["documents"][0][i],
                 "metadata": results["metadatas"][0][i],
-                "distance": results["distances"][0][i],
+                "distance": distance,
+                "similarity": 1.0 - distance,
+                "recall_rank": i + 1,
             })
         return docs
 
